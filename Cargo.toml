@@ -1,0 +1,30 @@
+[package]
+name = "opentracker"
+version = "0.1.0"
+edition = "2021"
+authors = ["synthalorian"]
+description = "Privacy-first time tracker — local, no cloud, no accounts"
+license = "MIT"
+repository = "https://github.com/synthalorian/opentracker"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.27"
+ratatui = "0.24"
+rusqlite = { version = "0.30", features = ["bundled"] }
+chrono = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+axum = "0.7"
+tower-http = { version = "0.5", features = ["fs"] }
+anyhow = "1"
+shellexpand = "3.1.2"
+csv = "1.4.0"
+x11rb = { version = "0.13", features = ["screensaver"] }
+regex = "1"
+toml = "0.8"
+
+[[bin]]
+name = "tracker"
+path = "src/main.rs"
