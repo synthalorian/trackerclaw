@@ -34,7 +34,8 @@ impl Store {
                 tags TEXT,
                 started_at TEXT NOT NULL,
                 ended_at TEXT,
-                duration_seconds INTEGER
+                duration_seconds INTEGER,
+                user_id INTEGER DEFAULT 1
             )",
             [],
         )?;
@@ -44,6 +45,37 @@ impl Store {
                 entry_id INTEGER
             )",
             [],
+        )?;
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS budgets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                project_tag TEXT NOT NULL UNIQUE,
+                budget_seconds INTEGER NOT NULL,
+                created_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                role TEXT NOT NULL DEFAULT 'member',
+                created_at TEXT NOT NULL
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS webhook_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                url TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                headers TEXT
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO users (id, name, role, created_at) VALUES (1, 'default', 'admin', ?1)",
+            [Utc::now().to_rfc3339()],
         )?;
         Ok(())
     }
@@ -242,5 +274,120 @@ impl Store {
             })?;
             rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
         }
+    }
+
+    pub fn set_budget(&self, project_tag: &str, budget_seconds: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO budgets (project_tag, budget_seconds, created_at) VALUES (?1, ?2, ?3)",
+            params![project_tag, budget_seconds, Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_budget(&self, project_tag: &str) -> Result<Option<(String, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT project_tag, budget_seconds FROM budgets WHERE project_tag = ?1"
+        )?;
+        let mut rows = stmt.query([project_tag])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some((row.get(0)?, row.get(1)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn list_budgets(&self) -> Result<Vec<(String, i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT b.project_tag, b.budget_seconds, COALESCE(SUM(e.duration_seconds), 0)
+             FROM budgets b
+             LEFT JOIN entries e ON e.tags LIKE ('%' || b.project_tag || '%') AND e.duration_seconds IS NOT NULL
+             GROUP BY b.project_tag"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn delete_budget(&self, project_tag: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM budgets WHERE project_tag = ?1",
+            [project_tag],
+        )?;
+        Ok(())
+    }
+
+    pub fn set_webhook(&self, url: &str, enabled: bool, headers: Option<&str>) -> Result<()> {
+        let enabled_i = if enabled { 1 } else { 0 };
+        self.conn.execute(
+            "INSERT OR REPLACE INTO webhook_config (id, url, enabled, headers) VALUES (1, ?1, ?2, ?3)",
+            params![url, enabled_i, headers],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_webhook(&self) -> Result<Option<(String, bool, Option<String>)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT url, enabled, headers FROM webhook_config WHERE id = 1"
+        )?;
+        let mut rows = stmt.query([])?;
+        if let Some(row) = rows.next()? {
+            let url: String = row.get(0)?;
+            let enabled: i64 = row.get(1)?;
+            let headers: Option<String> = row.get(2)?;
+            Ok(Some((url, enabled != 0, headers)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn add_user(&self, name: &str, role: &str) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO users (name, role, created_at) VALUES (?1, ?2, ?3)",
+            params![name, role, Utc::now().to_rfc3339()],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn list_users(&self) -> Result<Vec<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, role FROM users ORDER BY id"
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_user(&self, name: &str) -> Result<Option<(i64, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, role FROM users WHERE name = ?1"
+        )?;
+        let mut rows = stmt.query([name])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some((row.get(0)?, row.get(1)?, row.get(2)?)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn entries_for_date_range(&self, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<Vec<Entry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, tags, started_at, ended_at, duration_seconds
+             FROM entries
+             WHERE started_at >= ?1 AND started_at < ?2 AND duration_seconds IS NOT NULL
+             ORDER BY started_at ASC"
+        )?;
+        let rows = stmt.query_map(params![start.to_rfc3339(), end.to_rfc3339()], |row| {
+            Ok(Entry {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                tags: row.get(2)?,
+                started_at: row.get(3)?,
+                ended_at: row.get(4)?,
+                duration_seconds: row.get(5)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 }

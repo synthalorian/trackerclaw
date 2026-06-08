@@ -1,6 +1,9 @@
+use crate::budget;
+use crate::calendar;
 use crate::charts;
 use crate::idle;
 use crate::store::Store;
+use chrono::Datelike;
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -23,6 +26,7 @@ enum Tab {
     Entries,
     DailyChart,
     ProjectChart,
+    Calendar,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -39,10 +43,13 @@ struct TuiState {
     idle_prompt: IdlePrompt,
     last_entry_name: Option<String>,
     last_entry_tags: Option<String>,
+    calendar_year: i32,
+    calendar_month: u32,
 }
 
 impl TuiState {
     fn new() -> Self {
+        let now = chrono::Local::now();
         Self {
             tab: Tab::Entries,
             selected: 0,
@@ -51,6 +58,8 @@ impl TuiState {
             idle_prompt: IdlePrompt::None,
             last_entry_name: None,
             last_entry_tags: None,
+            calendar_year: now.year(),
+            calendar_month: now.month(),
         }
     }
 }
@@ -67,15 +76,16 @@ pub async fn run(db: &str) -> Result<()> {
     let mut entries = store.list_today()?;
     let mut daily_stats = store.daily_stats(7)?;
     let mut project_stats = store.project_stats(30)?;
+    let mut budgets = store.list_budgets()?;
 
     let mut last_refresh = Instant::now();
 
     loop {
-        // Refresh data every 10 seconds
         if last_refresh.elapsed() >= Duration::from_secs(10) {
             entries = store.list_today()?;
             daily_stats = store.daily_stats(7)?;
             project_stats = store.project_stats(30)?;
+            budgets = store.list_budgets()?;
             last_refresh = Instant::now();
         }
 
@@ -108,11 +118,11 @@ pub async fn run(db: &str) -> Result<()> {
                 .constraints([Constraint::Length(3), Constraint::Min(0)])
                 .split(size);
 
-            // Tab bar
             let tabs_text = match state.tab {
-                Tab::Entries => "[Entries]  Daily  Projects",
-                Tab::DailyChart => " Entries  [Daily]  Projects",
-                Tab::ProjectChart => " Entries  Daily  [Projects]",
+                Tab::Entries => "[Entries]  Daily  Projects  Calendar",
+                Tab::DailyChart => " Entries  [Daily]  Projects  Calendar",
+                Tab::ProjectChart => " Entries  Daily  [Projects]  Calendar",
+                Tab::Calendar => " Entries  Daily  Projects  [Calendar]",
             };
             let tabs = Paragraph::new(tabs_text)
                 .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
@@ -123,7 +133,8 @@ pub async fn run(db: &str) -> Result<()> {
             match state.tab {
                 Tab::Entries => render_entries(f, main_chunks[1], &entries, state.selected),
                 Tab::DailyChart => render_daily_chart(f, main_chunks[1], &daily_stats),
-                Tab::ProjectChart => render_project_chart(f, main_chunks[1], &project_stats),
+                Tab::ProjectChart => render_project_chart(f, main_chunks[1], &project_stats, &budgets),
+                Tab::Calendar => { let _ = render_calendar(f, main_chunks[1], state.calendar_year, state.calendar_month, &store); }
             }
 
             // Idle prompt overlay
@@ -183,18 +194,21 @@ pub async fn run(db: &str) -> Result<()> {
                     KeyCode::Char('1') => state.tab = Tab::Entries,
                     KeyCode::Char('2') => state.tab = Tab::DailyChart,
                     KeyCode::Char('3') => state.tab = Tab::ProjectChart,
+                    KeyCode::Char('4') => state.tab = Tab::Calendar,
                     KeyCode::Right | KeyCode::Char('l') => {
                         state.tab = match state.tab {
                             Tab::Entries => Tab::DailyChart,
                             Tab::DailyChart => Tab::ProjectChart,
-                            Tab::ProjectChart => Tab::Entries,
+                            Tab::ProjectChart => Tab::Calendar,
+                            Tab::Calendar => Tab::Entries,
                         };
                     }
                     KeyCode::Left | KeyCode::Char('h') => {
                         state.tab = match state.tab {
-                            Tab::Entries => Tab::ProjectChart,
+                            Tab::Entries => Tab::Calendar,
                             Tab::DailyChart => Tab::Entries,
                             Tab::ProjectChart => Tab::DailyChart,
+                            Tab::Calendar => Tab::ProjectChart,
                         };
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -305,19 +319,87 @@ fn render_daily_chart(f: &mut ratatui::Frame, area: Rect, stats: &[(String, i64)
     f.render_widget(chart, area);
 }
 
-fn render_project_chart(f: &mut ratatui::Frame, area: Rect, stats: &[(String, i64)]) {
+fn render_project_chart(f: &mut ratatui::Frame, area: Rect, stats: &[(String, i64)], budgets: &[(String, i64, i64)]) {
     let filtered: Vec<(String, i64)> = stats.iter()
         .filter(|(_, s)| *s > 0)
         .take(8)
         .cloned()
         .collect();
 
-    let width = area.width as usize;
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(area);
+
+    let width = chunks[0].width as usize;
     let chart_lines = charts::tui_project_chart(&filtered, "Project Breakdown (Last 30 Days)", width.saturating_sub(2));
     let text = Text::from(chart_lines.into_iter().map(Line::from).collect::<Vec<_>>());
     let chart = Paragraph::new(text)
         .block(Block::default().borders(Borders::ALL).title("Project Chart"));
-    f.render_widget(chart, area);
+    f.render_widget(chart, chunks[0]);
+
+    let budget_items: Vec<Line> = budgets.iter().map(|(project, budget, used)| {
+        let bar = budget::render_budget_bar(*used, *budget, 20);
+        Line::from(vec![
+            Span::raw(format!("{:<15} ", project)),
+            Span::styled(bar, Style::default().fg(Color::Cyan)),
+        ])
+    }).collect();
+    let budget_text = Text::from(budget_items);
+    let budget_widget = Paragraph::new(budget_text)
+        .block(Block::default().borders(Borders::ALL).title("Budgets"));
+    f.render_widget(budget_widget, chunks[1]);
+}
+
+fn render_calendar(f: &mut ratatui::Frame, area: Rect, year: i32, month: u32, store: &Store) -> Result<()> {
+    use chrono::Datelike;
+    let first = chrono::NaiveDate::from_ymd_opt(year, month, 1).unwrap();
+    let mut days_in_month = 28u32;
+    while chrono::NaiveDate::from_ymd_opt(year, month, days_in_month + 1).is_some() {
+        days_in_month += 1;
+    }
+
+    let start = first.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(chrono::Utc).unwrap();
+    let end = start + chrono::Duration::days(days_in_month as i64);
+    let entries = store.entries_for_date_range(start, end)?;
+    let mut daily: std::collections::HashMap<u32, i64> = std::collections::HashMap::new();
+    for e in entries {
+        if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&e.started_at) {
+            let day = dt.day();
+            *daily.entry(day).or_insert(0) += e.duration_seconds.unwrap_or(0);
+        }
+    }
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(format!("  {}-{}", year, month), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from("  Su  Mo  Tu  We  Th  Fr  Sa"),
+    ];
+
+    let weekday = first.weekday().num_days_from_sunday();
+    let mut current_line = String::from("  ");
+    for _ in 0..weekday {
+        current_line.push_str("    ");
+    }
+
+    for day in 1..=days_in_month {
+        let seconds = daily.get(&day).copied().unwrap_or(0);
+        let style = if seconds > 0 {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+        let day_str = format!("{:>3} ", day);
+        let spans = vec![Span::styled(day_str, style)];
+        lines.push(Line::from(spans));
+    }
+
+    let text = Text::from(lines);
+    let cal = Paragraph::new(text)
+        .block(Block::default().borders(Borders::ALL).title("Calendar"));
+    f.render_widget(cal, area);
+    Ok(())
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

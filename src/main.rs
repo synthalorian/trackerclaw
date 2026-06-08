@@ -1,3 +1,4 @@
+use chrono::Datelike;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -11,6 +12,12 @@ mod charts;
 mod idle;
 mod autotag;
 mod invoice;
+mod notifications;
+mod webhook;
+mod budget;
+mod calendar;
+mod integrations;
+mod team;
 
 #[derive(Parser)]
 #[command(name = "tracker")]
@@ -85,6 +92,69 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Manage project budgets
+    Budget {
+        #[command(subcommand)]
+        action: BudgetAction,
+    },
+    /// View calendar
+    Calendar {
+        #[arg(short, long)]
+        month: Option<u32>,
+        #[arg(short, long)]
+        year: Option<i32>,
+    },
+    /// Configure webhook
+    Webhook {
+        #[command(subcommand)]
+        action: WebhookAction,
+    },
+    /// Toggl Track integration
+    Toggl {
+        #[command(subcommand)]
+        action: TogglAction,
+    },
+    /// Clockify integration
+    Clockify {
+        #[command(subcommand)]
+        action: ClockifyAction,
+    },
+    /// Team management
+    Team {
+        #[command(subcommand)]
+        action: TeamAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum BudgetAction {
+    Set { project: String, hours: f64 },
+    List,
+    Delete { project: String },
+}
+
+#[derive(Subcommand)]
+enum WebhookAction {
+    Set { url: String, #[arg(short, long)] enabled: bool, #[arg(short, long)] headers: Option<String> },
+    Show,
+}
+
+#[derive(Subcommand)]
+enum TogglAction {
+    Import { api_token: String, #[arg(short, long)] start: String, #[arg(short, long)] end: String },
+    Export { api_token: String, #[arg(short, long)] workspace_id: i64 },
+}
+
+#[derive(Subcommand)]
+enum ClockifyAction {
+    Import { api_key: String, workspace_id: String },
+}
+
+#[derive(Subcommand)]
+enum TeamAction {
+    Add { name: String, #[arg(short, long, default_value = "member")] role: String },
+    List,
+    Report { name: String, #[arg(short, long, default_value = "7")] days: i64 },
 }
 
 #[tokio::main]
@@ -140,6 +210,39 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Invoice { client, rate, days, tag, output }) => {
             invoice::generate_invoice_file(&db_path, &client, rate, days, tag.as_deref(), &output).await
         }
+        Some(Commands::Budget { action }) => match action {
+            BudgetAction::Set { project, hours } => budget::set_budget(&db_path, &project, hours),
+            BudgetAction::List => budget::list_budgets(&db_path),
+            BudgetAction::Delete { project } => budget::delete_budget(&db_path, &project),
+        },
+        Some(Commands::Calendar { month, year }) => {
+            let y = year.unwrap_or_else(|| chrono::Local::now().year());
+            let m = month.unwrap_or_else(|| chrono::Local::now().month());
+            let days = calendar::month_view(&db_path, y, m)?;
+            println!("Calendar: {}-{}", y, m);
+            for (date, seconds) in days {
+                if seconds > 0 {
+                    println!("  {}: {}", date, calendar::format_duration_short(seconds));
+                }
+            }
+            Ok(())
+        }
+        Some(Commands::Webhook { action }) => match action {
+            WebhookAction::Set { url, enabled, headers } => webhook::set_webhook(&db_path, &url, enabled, headers.as_deref()),
+            WebhookAction::Show => webhook::show_webhook(&db_path),
+        },
+        Some(Commands::Toggl { action }) => match action {
+            TogglAction::Import { api_token, start, end } => integrations::import_toggl(&db_path, &api_token, &start, &end).await,
+            TogglAction::Export { api_token, workspace_id } => integrations::export_toggl(&db_path, &api_token, workspace_id).await,
+        },
+        Some(Commands::Clockify { action }) => match action {
+            ClockifyAction::Import { api_key, workspace_id } => integrations::import_clockify(&db_path, &api_key, &workspace_id).await,
+        },
+        Some(Commands::Team { action }) => match action {
+            TeamAction::Add { name, role } => team::add_user(&db_path, &name, &role),
+            TeamAction::List => team::list_users(&db_path),
+            TeamAction::Report { name, days } => team::user_report(&db_path, &name, days),
+        },
         None => {
             println!("OpenTracker — privacy-first time tracker");
             println!("Run 'tracker --help' for commands.");

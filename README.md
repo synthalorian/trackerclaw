@@ -151,6 +151,103 @@ Invoices include:
 - Project totals and grand total
 - Print-friendly CSS for HTML output (Ctrl+P to print/PDF)
 
+## Phase 3 Features
+
+### Project Budgets
+
+Set time budgets per project and track progress:
+
+```bash
+# Set a 40-hour budget for a project
+tracker budget set rust 40
+
+# List all budgets with usage
+tracker budget list
+
+# Remove a budget
+tracker budget delete rust
+```
+
+Budgets appear as visual progress bars in the TUI (Projects tab).
+
+### Calendar View
+
+View your logged time in a calendar grid:
+
+```bash
+# View current month
+tracker calendar
+
+# View specific month
+tracker calendar --month 6 --year 2026
+```
+
+In the TUI, press `4` to switch to the Calendar tab.
+
+### Desktop Notifications
+
+OpenTracker now sends desktop notifications via `notify-rust` when:
+- A timer hits a milestone (1h, 2h, etc.)
+- Idle time is detected and tracking is paused
+- A project budget reaches 80% or 100%
+
+### Webhook Exports
+
+Automatically POST time entries to a configured URL when stopping a timer:
+
+```bash
+# Configure webhook
+tracker webhook set https://example.com/hooks/tracker --enabled
+
+# Show current webhook config
+tracker webhook show
+```
+
+Payload is JSON with the full entry object (name, tags, started_at, ended_at, duration_seconds).
+
+### Integrations
+
+#### Toggl Track
+
+```bash
+# Import time entries from Toggl
+tracker toggl import <API_TOKEN> --start 2026-06-01 --end 2026-06-08
+
+# Export entries to Toggl
+tracker toggl export <API_TOKEN> --workspace-id 12345
+```
+
+#### Clockify
+
+```bash
+# Import projects and time entries from Clockify
+tracker clockify import <API_KEY> <WORKSPACE_ID>
+```
+
+### Team Mode
+
+SQLite-backed multi-user support with shared projects and read-only reports:
+
+```bash
+# Add a team member
+tracker team add alice --role member
+
+# List all users
+tracker team list
+
+# Generate read-only report for a user
+tracker team report alice --days 7
+```
+
+Team mode uses the existing SQLite database with a `users` table. All entries are tagged with a `user_id` (default: 1 for the default user).
+
+## TUI Updates
+
+The interactive TUI now includes:
+- **Press `4`** — Calendar view (month grid with highlighted days)
+- **Projects tab** — Shows budget progress bars alongside project breakdown
+- **Idle notifications** — Desktop notifications when idle is detected
+
 ## Roadmap
 
 - [x] Pomodoro timer
@@ -158,7 +255,13 @@ Invoices include:
 - [x] Idle detection
 - [x] Auto-tagging by window title
 - [x] Invoice generation
-- [ ] Project budgets / time limits
+- [x] Project budgets / time limits
+- [x] Desktop notifications
+- [x] Webhook exports
+- [x] Toggl Track integration
+- [x] Clockify integration
+- [x] Team mode
+- [x] Calendar view
 - [ ] Sync across devices (encrypted)
 
 ## License

@@ -1,4 +1,5 @@
 use crate::store::Store;
+use crate::webhook;
 use anyhow::Result;
 use std::path::Path;
 
@@ -15,6 +16,7 @@ pub async fn stop(db: &str) -> Result<()> {
         Some(entry) => {
             let dur = entry.duration_seconds.unwrap_or(0);
             println!("Stopped: {} — {}s", entry.name, dur);
+            let _ = webhook::send_webhook(db, &entry).await;
         }
         None => println!("Nothing is being tracked."),
     }
