@@ -1,8 +1,13 @@
+use crate::store::Store;
+use crate::time_parse::{default_sync_window, parse_date};
 use anyhow::{bail, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use chrono::{DateTime, Utc};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashSet;
+use std::path::Path;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TogglEntry {
@@ -58,7 +63,7 @@ impl TogglClient {
                 "start": entry.start,
                 "duration": entry.duration,
                 "tags": entry.tags,
-                "created_with": "opentracker"
+                "created_with": "trackerclaw"
             }))
             .send()
             .await?;
@@ -95,8 +100,8 @@ impl ClockifyClient {
 
     pub async fn get_time_entries(&self, start: &str, end: &str) -> Result<Vec<ClockifyEntry>> {
         let url = format!(
-            "https://api.clockify.me/api/v1/workspaces/{}/user/{}/time-entries?start={}&end={}&page-size=5000",
-            self.workspace_id, "", start, end
+            "https://api.clockify.me/api/v1/workspaces/{}/user/me/time-entries?start={}&end={}&page-size=5000",
+            self.workspace_id, start, end
         );
         let resp = self.client
             .get(&url)
@@ -132,27 +137,118 @@ impl ClockifyClient {
     }
 }
 
-pub async fn import_toggl(_db: &str, api_token: &str, start: &str, end: &str) -> Result<()> {
+fn load_existing_keys(store: &Store, start: DateTime<Utc>, end: DateTime<Utc>) -> Result<HashSet<(String, String)>> {
+    let entries = store.entries_for_date_range(start, end)?;
+    Ok(entries
+        .into_iter()
+        .map(|e| (e.name, e.started_at))
+        .collect())
+}
+
+pub async fn import_toggl(db: &str, api_token: &str, start: &str, end: &str) -> Result<()> {
+    let start_dt = parse_date(start)?;
+    let end_dt = parse_date(end)?;
     let client = TogglClient::new(api_token.to_string());
-    let entries = client.get_time_entries(start, end).await?;
-    println!("Fetched {} entries from Toggl.", entries.len());
-    println!("Use 'tracker toggl sync' to write them to the local database. (Feature stub - implement sync logic)");
-    Ok(())
-}
+    let entries = client.get_time_entries(&start_dt.to_rfc3339(), &end_dt.to_rfc3339()).await?;
 
-pub async fn export_toggl(_db: &str, _api_token: &str, workspace_id: i64) -> Result<()> {
-    println!("Exporting entries to Toggl workspace {}...", workspace_id);
-    println!("(Feature stub - implement export logic with date range selection)");
-    Ok(())
-}
+    let store = Store::open(Path::new(db))?;
+    let existing = load_existing_keys(&store, start_dt, end_dt)?;
 
-pub async fn import_clockify(_db: &str, api_key: &str, workspace_id: &str) -> Result<()> {
-    let client = ClockifyClient::new(api_key.to_string(), workspace_id.to_string());
-    let projects = client.get_projects().await?;
-    println!("Fetched {} projects from Clockify.", projects.len());
-    for (id, name) in &projects {
-        println!("  {} - {}", id, name);
+    let mut imported = 0;
+    let mut skipped = 0;
+    for e in entries {
+        let started = DateTime::parse_from_rfc3339(&e.start)?.with_timezone(&Utc);
+        let ended = started + chrono::Duration::seconds(e.duration);
+        let tags = if e.tags.is_empty() {
+            None
+        } else {
+            Some(e.tags.join(","))
+        };
+
+        if existing.contains(&(e.description.clone(), started.to_rfc3339())) {
+            skipped += 1;
+            continue;
+        }
+
+        store.insert_completed_entry(&e.description, tags.as_deref(), None, started, ended, e.duration)?;
+        imported += 1;
     }
-    println!("Use 'tracker clockify sync' to write time entries to the local database. (Feature stub)");
+
+    println!("Toggl import complete: fetched {}, imported {}, skipped {} duplicates.",
+        imported + skipped, imported, skipped);
+    Ok(())
+}
+
+pub async fn export_toggl(db: &str, api_token: &str, workspace_id: i64, start: Option<&str>, end: Option<&str>) -> Result<()> {
+    let (start_dt, end_dt) = match (start, end) {
+        (Some(s), Some(e)) => (parse_date(s)?, parse_date(e)?),
+        _ => default_sync_window(7),
+    };
+
+    let store = Store::open(Path::new(db))?;
+    let entries = store.entries_for_date_range(start_dt, end_dt)?;
+
+    let client = TogglClient::new(api_token.to_string());
+    let mut exported = 0;
+    for e in entries {
+        let started = e.started_at;
+        let duration = e.duration_seconds.unwrap_or(0);
+        let tags: Vec<String> = e.tags.as_deref().unwrap_or("").split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+        let toggl_entry = TogglEntry {
+            description: e.name,
+            start: started,
+            duration,
+            tags,
+        };
+        client.create_time_entry(&toggl_entry, workspace_id).await?;
+        exported += 1;
+    }
+
+    println!("Exported {} entries to Toggl workspace {}.", exported, workspace_id);
+    Ok(())
+}
+
+pub async fn import_clockify(db: &str, api_key: &str, workspace_id: &str, start: &str, end: &str) -> Result<()> {
+    let start_dt = parse_date(start)?;
+    let end_dt = parse_date(end)?;
+    let client = ClockifyClient::new(api_key.to_string(), workspace_id.to_string());
+
+    let projects = client.get_projects().await?;
+    let project_map: std::collections::HashMap<String, String> = projects.into_iter().collect();
+
+    let entries = client.get_time_entries(&start_dt.to_rfc3339(), &end_dt.to_rfc3339()).await?;
+
+    let store = Store::open(Path::new(db))?;
+    let existing = load_existing_keys(&store, start_dt, end_dt)?;
+
+    let mut imported = 0;
+    let mut skipped = 0;
+    for e in entries {
+        let started = DateTime::parse_from_rfc3339(&e.start)?.with_timezone(&Utc);
+        let ended = DateTime::parse_from_rfc3339(&e.end)?.with_timezone(&Utc);
+        let duration = (ended - started).num_seconds();
+
+        let mut tags: Vec<String> = Vec::new();
+        if let Some(pid) = &e.project_id {
+            if let Some(name) = project_map.get(pid) {
+                tags.push(name.clone());
+            }
+        }
+        for tid in &e.tag_ids {
+            tags.push(tid.clone());
+        }
+        let tags_str = if tags.is_empty() { None } else { Some(tags.join(",")) };
+
+        if existing.contains(&(e.description.clone(), started.to_rfc3339())) {
+            skipped += 1;
+            continue;
+        }
+
+        store.insert_completed_entry(&e.description, tags_str.as_deref(), None, started, ended, duration)?;
+        imported += 1;
+    }
+
+    println!("Clockify import complete: fetched {}, imported {}, skipped {} duplicates.",
+        imported + skipped, imported, skipped);
     Ok(())
 }

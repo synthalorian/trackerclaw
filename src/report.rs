@@ -2,12 +2,19 @@ use crate::store::Store;
 use anyhow::Result;
 use std::path::Path;
 
-pub async fn generate(db: &str, days: Option<i64>, project: Option<String>) -> Result<()> {
+pub async fn generate(db: &str, days: Option<i64>, project: Option<String>, user_id: i64, is_admin: bool) -> Result<()> {
     let store = Store::open(Path::new(db))?;
     let days = days.unwrap_or(7);
-    let entries = match project {
-        Some(ref tag) => store.list_by_tag(tag, days)?,
-        None => store.list_recent(days)?,
+
+    let entries = if let Some(ref name) = project {
+        if let Some(project) = store.get_project_by_name(name)? {
+            store.list_by_project(project.id, days, user_id, is_admin)?
+        } else {
+            // Fallback to tag-based filtering for backwards compatibility
+            store.list_by_tag(name, days, user_id, is_admin)?
+        }
+    } else {
+        store.list_recent(days, user_id, is_admin)?
     };
 
     if entries.is_empty() {

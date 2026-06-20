@@ -1,4 +1,4 @@
-# ⏱️ OpenTracker
+# 🦞 TrackerClaw
 
 A privacy-first time tracker. Local SQLite, no accounts, no cloud. TUI for quick entries, web dashboard for reports.
 
@@ -19,33 +19,68 @@ A privacy-first time tracker. Local SQLite, no accounts, no cloud. TUI for quick
 
 ```bash
 cargo build --release
-sudo cp target/release/tracker /usr/local/bin/
+./target/release/trackerclaw install
+systemctl --user enable --now trackerclaw-idle
+```
+
+The `install` command copies the binary to `~/.local/bin` (or `/usr/local/bin` if it already exists there) and installs a systemd user service for the idle monitor.
+
+To remove:
+
+```bash
+trackerclaw uninstall
+```
+
+## Configuration
+
+TrackerClaw reads defaults from `~/.config/trackerclaw/config.toml`. The file is created automatically on first run.
+
+```toml
+idle_threshold_ms = 300000
+pomodoro_work_minutes = 25
+pomodoro_break_minutes = 5
+default_rate = 150.0
+theme = "synthwave"
 ```
 
 ## Usage
 
 ```bash
-tracker start "Coding VHS-86" --tags rust,ui    # Start tracking
-tracker start "Meeting" --auto-tags               # Auto-detect tags from window title + task name
-tracker stop                                      # Stop current
-tracker status                                    # What's active?
-tracker resume                                    # Resume last stopped task
-tracker today                                     # Today's entries
-tracker tui                                       # Interactive TUI with charts
-tracker gui                                       # Web dashboard with charts
-tracker pomodoro "Deep work"                      # 25min focus + 5min break
-tracker report --days 7                           # Weekly report
-tracker report --project rust --days 30           # Project report
-tracker export csv -o hours.csv                   # Export to CSV
-tracker export json -o hours.json                 # Export to JSON
-tracker export ical -o hours.ics                  # Export to ICAL
+# Projects
+trackerclaw project add "VHS-86" --client "Acme" --rate 175 --color "#00f0ff"
+trackerclaw project list
+trackerclaw project edit "VHS-86" --rate 200
+trackerclaw project delete "VHS-86"
+
+trackerclaw start "Coding VHS-86" --tags rust,ui --project "VHS-86"    # Start tracking
+trackerclaw start "Coding VHS-86" --project "VHS-86"                    # Project only
+trackerclaw start "Meeting" --auto-tags               # Auto-detect tags from window title + task name
+trackerclaw stop                                      # Stop current
+trackerclaw status                                    # What's active?
+trackerclaw resume                                    # Resume last stopped task
+trackerclaw today                                     # Today's entries
+trackerclaw tui                                       # Interactive TUI with charts
+trackerclaw gui                                       # Web dashboard with charts
+trackerclaw pomodoro "Deep work"                      # 25min focus + 5min break
+trackerclaw report --days 7                           # Weekly report
+trackerclaw report --project "VHS-86" --days 30       # Project report
+trackerclaw export csv -o hours.csv                   # Export to CSV
+trackerclaw export json -o hours.json                 # Export to JSON
+trackerclaw export ical -o hours.ics                  # Export to ICAL
+
+# Edit/delete entries
+# (IDs come from `trackerclaw today` or `trackerclaw entry show <id>`)
+trackerclaw entry show 42                              # Show a single entry
+trackerclaw entry edit 42 --tags rust,api              # Edit tags
+trackerclaw entry edit 42 --started-at 2026-06-19T09:00:00Z --ended-at 2026-06-19T10:30:00Z
+trackerclaw entry delete 42                            # Delete an entry
 
 # Phase 2 Features
-tracker idle                                      # Monitor idle time & auto-pause
-tracker idle-status                               # Check current idle status
-tracker detect-tags                               # Preview tags for current window
-tracker invoice --client "Acme Corp" --rate 150 --days 30 -o invoice.html
-tracker invoice --client "Acme Corp" --rate 150 --days 30 -o invoice.md
+trackerclaw idle                                      # Monitor idle time & auto-pause
+trackerclaw idle-status                               # Check current idle status
+trackerclaw detect-tags                               # Preview tags for current window
+trackerclaw invoice --client "Acme Corp" --rate 150 --days 30 -o invoice.html
+trackerclaw invoice --client "Acme Corp" --rate 150 --days 30 -o invoice.md
 ```
 
 ## Web Dashboard
@@ -53,20 +88,23 @@ tracker invoice --client "Acme Corp" --rate 150 --days 30 -o invoice.md
 Launch the synthwave-styled dashboard:
 
 ```bash
-tracker gui
+trackerclaw gui
 ```
 
 Features:
-- **Daily Hours Chart** — SVG bar chart showing last 14 days
-- **Project Breakdown** — SVG pie chart showing time distribution by tag
-- **Today's Entries** — Live-updating entry list with durations
+- **Start/Stop Timer** — control tracking directly from the browser
+- **Live Session Display** — current task + running elapsed time
+- **Daily Hours Chart** — Chart.js bar chart for the last 14 days
+- **Project Breakdown** — Chart.js doughnut chart by tag
+- **Today's Entries** — live-updating list with durations
+- **Glassmorphism synthwave UI** — neon cyan, magenta, and purple accents
 
 ## TUI Charts
 
 The interactive TUI now includes ASCII/Unicode bar charts:
 
 ```bash
-tracker tui
+trackerclaw tui
 ```
 
 Inside the TUI:
@@ -83,10 +121,10 @@ Automatically pause tracking when you step away:
 
 ```bash
 # Start monitoring in background
-tracker idle
+trackerclaw idle
 
 # Check current status
-tracker idle-status
+trackerclaw idle-status
 ```
 
 Idle detection works by checking input device activity. It supports:
@@ -96,7 +134,7 @@ Idle detection works by checking input device activity. It supports:
 
 Default idle threshold: **5 minutes**
 
-When running the TUI, you'll get a popup prompt when returning from idle asking whether to **resume** the previous task (discard idle gap) or **keep it stopped** (keep idle gap). You can also use `tracker resume` from the command line to quickly restart your last task.
+When running the TUI, you'll get a popup prompt when returning from idle asking whether to **resume** the previous task (discard idle gap) or **keep it stopped** (keep idle gap). You can also use `trackerclaw resume` from the command line to quickly restart your last task.
 
 ## Auto-Tagging
 
@@ -104,13 +142,13 @@ Automatically assign tags based on the active window title **and task name**:
 
 ```bash
 # Auto-detect tags when starting tracking
-tracker start "Working on API" --auto-tags
+trackerclaw start "Working on API" --auto-tags
 
 # Preview what tags would be assigned
-tracker detect-tags
+trackerclaw detect-tags
 ```
 
-Rules are defined in `~/.config/opentracker/autotag.toml`. A default config is created automatically with common patterns. Tags are inferred from both the active window title and the task name you provide, then combined:
+Rules are defined in `~/.config/trackerclaw/autotag.toml`. A default config is created automatically with common patterns. Tags are inferred from both the active window title and the task name you provide, then combined:
 
 ```toml
 [[rules]]
@@ -135,14 +173,20 @@ Window title detection supports:
 Generate professional HTML or Markdown invoices:
 
 ```bash
-# Generate HTML invoice with synthwave styling
-tracker invoice --client "Acme Corp" --rate 150 -o invoice.html
+# Generate HTML invoice with synthwave styling (uses default_rate from config)
+trackerclaw invoice --client "Acme Corp" -o invoice.html
+
+# Override rate on the fly
+trackerclaw invoice --client "Acme Corp" --rate 150 -o invoice.html
+
+# Invoice by project (uses project's hourly_rate if set)
+trackerclaw invoice --client "Acme Corp" --project "VHS-86" -o invoice.html
 
 # Generate Markdown invoice for easy editing
-tracker invoice --client "Acme Corp" --rate 150 -o invoice.md
+trackerclaw invoice --client "Acme Corp" --rate 150 -o invoice.md
 
 # Generate invoice for specific project/tag
-tracker invoice --client "Acme Corp" --rate 150 --tag rust --days 7 -o rust-invoice.html
+trackerclaw invoice --client "Acme Corp" --rate 150 --tag rust --days 7 -o rust-invoice.html
 ```
 
 Invoices include:
@@ -159,13 +203,13 @@ Set time budgets per project and track progress:
 
 ```bash
 # Set a 40-hour budget for a project
-tracker budget set rust 40
+trackerclaw budget set rust 40
 
 # List all budgets with usage
-tracker budget list
+trackerclaw budget list
 
 # Remove a budget
-tracker budget delete rust
+trackerclaw budget delete rust
 ```
 
 Budgets appear as visual progress bars in the TUI (Projects tab).
@@ -176,17 +220,20 @@ View your logged time in a calendar grid:
 
 ```bash
 # View current month
-tracker calendar
+trackerclaw calendar
 
 # View specific month
-tracker calendar --month 6 --year 2026
+trackerclaw calendar --month 6 --year 2026
+
+# View current week with entries
+trackerclaw calendar --week
 ```
 
 In the TUI, press `4` to switch to the Calendar tab.
 
 ### Desktop Notifications
 
-OpenTracker now sends desktop notifications via `notify-rust` when:
+TrackerClaw now sends desktop notifications via `notify-rust` when:
 - A timer hits a milestone (1h, 2h, etc.)
 - Idle time is detected and tracking is paused
 - A project budget reaches 80% or 100%
@@ -197,10 +244,10 @@ Automatically POST time entries to a configured URL when stopping a timer:
 
 ```bash
 # Configure webhook
-tracker webhook set https://example.com/hooks/tracker --enabled
+trackerclaw webhook set https://example.com/hooks/trackerclaw --enabled
 
 # Show current webhook config
-tracker webhook show
+trackerclaw webhook show
 ```
 
 Payload is JSON with the full entry object (name, tags, started_at, ended_at, duration_seconds).
@@ -210,36 +257,48 @@ Payload is JSON with the full entry object (name, tags, started_at, ended_at, du
 #### Toggl Track
 
 ```bash
-# Import time entries from Toggl
-tracker toggl import <API_TOKEN> --start 2026-06-01 --end 2026-06-08
+# Import time entries from Toggl (date-only or RFC3339)
+trackerclaw toggl import <API_TOKEN> --start 2026-06-01 --end 2026-06-08
 
-# Export entries to Toggl
-tracker toggl export <API_TOKEN> --workspace-id 12345
+# Export local entries to a Toggl workspace
+# Defaults to the last 7 days; override with --start and --end
+trackerclaw toggl export <API_TOKEN> --workspace-id 12345
+trackerclaw toggl export <API_TOKEN> --workspace-id 12345 --start 2026-06-01 --end 2026-06-08
 ```
 
 #### Clockify
 
 ```bash
-# Import projects and time entries from Clockify
-tracker clockify import <API_KEY> <WORKSPACE_ID>
+# Import time entries from Clockify (projects are mapped to tags)
+trackerclaw clockify import <API_KEY> <WORKSPACE_ID> --start 2026-06-01 --end 2026-06-08
 ```
 
 ### Team Mode
 
-SQLite-backed multi-user support with shared projects and read-only reports:
+SQLite-backed multi-user support with role-based access:
 
 ```bash
-# Add a team member
-tracker team add alice --role member
+# Add a team member (admin only)
+trackerclaw team add alice --role member
+
+# Switch active user (persists in ~/.config/trackerclaw/.user)
+trackerclaw team switch alice
+
+# Or use --user for one-off commands
+trackerclaw --user alice today
 
 # List all users
-tracker team list
+trackerclaw team list
 
-# Generate read-only report for a user
-tracker team report alice --days 7
+# Generate report for a user (members can only view themselves)
+trackerclaw team report alice --days 7
 ```
 
-Team mode uses the existing SQLite database with a `users` table. All entries are tagged with a `user_id` (default: 1 for the default user).
+Roles:
+- **admin** — full access, can manage users and see all entries.
+- **member** — can only start/stop their own entries and view their own reports/calendar/exports.
+
+All entries are tagged with a `user_id`. The default user is `default` with role `admin`.
 
 ## TUI Updates
 
@@ -266,4 +325,4 @@ The interactive TUI now includes:
 
 ## License
 
-MIT
+MIT — This is the wave. 🎹🦞

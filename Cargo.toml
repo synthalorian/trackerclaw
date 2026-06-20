@@ -1,11 +1,11 @@
 [package]
-name = "opentracker"
+name = "trackerclaw"
 version = "0.1.0"
 edition = "2021"
 authors = ["synthalorian"]
 description = "Privacy-first time tracker — local, no cloud, no accounts"
 license = "MIT"
-repository = "https://github.com/synthalorian/opentracker"
+repository = "https://github.com/synthalorian/trackerclaw"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -29,5 +29,5 @@ reqwest = { version = "0.12", features = ["json"] }
 base64 = "0.22"
 
 [[bin]]
-name = "tracker"
+name = "trackerclaw"
 path = "src/main.rs"

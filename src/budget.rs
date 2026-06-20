@@ -1,9 +1,30 @@
+use crate::notifications;
 use crate::store::Store;
 use anyhow::Result;
 use std::path::Path;
 
+pub fn check_budget_warnings(db: &str) -> Result<()> {
+    let store = Store::open(Path::new(db))?;
+    let budgets = store.list_budgets()?;
+    for (project, budget_sec, used_sec) in budgets {
+        if budget_sec <= 0 {
+            continue;
+        }
+        let budget_h = budget_sec as f64 / 3600.0;
+        let used_h = used_sec as f64 / 3600.0;
+        let ratio = used_h / budget_h;
+        if ratio >= 1.0 || ratio >= 0.8 {
+            notifications::notify_budget_warning(&project, used_h, budget_h);
+        }
+    }
+    Ok(())
+}
+
 pub fn set_budget(db: &str, project: &str, hours: f64) -> Result<()> {
     let store = Store::open(Path::new(db))?;
+    if store.get_project_by_name(project)?.is_none() {
+        anyhow::bail!("Project '{}' not found. Create it first with 'trackerclaw project add {}'", project, project);
+    }
     let seconds = (hours * 3600.0) as i64;
     store.set_budget(project, seconds)?;
     println!("Budget set for '{}': {:.1} hours", project, hours);

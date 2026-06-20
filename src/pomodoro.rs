@@ -1,3 +1,4 @@
+use crate::config;
 use crate::store::Store;
 use anyhow::Result;
 use chrono::Utc;
@@ -17,9 +18,6 @@ use ratatui::{
 use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 
-const WORK_MINUTES: u64 = 25;
-const BREAK_MINUTES: u64 = 5;
-
 #[derive(Clone, Copy, PartialEq)]
 enum Phase {
     Work,
@@ -34,11 +32,15 @@ struct PomodoroState {
     task_name: String,
     running: bool,
     done: bool,
+    work_seconds: u64,
+    break_seconds: u64,
 }
 
 impl PomodoroState {
     fn new(task_name: String) -> Self {
-        let total = Duration::from_secs(WORK_MINUTES * 60);
+        let cfg = config::load_config();
+        let work_seconds = cfg.pomodoro_work_minutes * 60;
+        let total = Duration::from_secs(work_seconds);
         Self {
             phase: Phase::Work,
             remaining: total,
@@ -47,6 +49,8 @@ impl PomodoroState {
             task_name,
             running: true,
             done: false,
+            work_seconds,
+            break_seconds: cfg.pomodoro_break_minutes * 60,
         }
     }
 
@@ -65,7 +69,7 @@ impl PomodoroState {
 
     fn transition_to_break(&mut self) {
         self.phase = Phase::Break;
-        self.total = Duration::from_secs(BREAK_MINUTES * 60);
+        self.total = Duration::from_secs(self.break_seconds);
         self.remaining = self.total;
         self.start = Instant::now();
         self.running = true;
@@ -197,10 +201,10 @@ pub async fn run(db: &str, task_name: Option<String>) -> Result<()> {
     if state.phase == Phase::Break || (state.phase == Phase::Work && state.done) {
         let store = Store::open(std::path::Path::new(db))?;
         let name = format!("Pomodoro: {}", task);
-        let started = Utc::now() - chrono::Duration::seconds((WORK_MINUTES * 60) as i64);
+        let started = Utc::now() - chrono::Duration::seconds(state.work_seconds as i64);
         let ended = Utc::now();
         let duration = (ended - started).num_seconds();
-        store.insert_completed_entry(&name, Some("pomodoro"), started, ended, duration)?;
+        store.insert_completed_entry(&name, Some("pomodoro"), None, started, ended, duration)?;
         println!("Logged Pomodoro session ({}s)", duration);
     }
 

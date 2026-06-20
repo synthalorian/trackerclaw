@@ -23,7 +23,7 @@ impl Default for TagConfig {
 
 /// Load tag rules from config file
 pub fn load_config() -> TagConfig {
-    let config_path = shellexpand::tilde("~/.config/opentracker/autotag.toml").to_string();
+    let config_path = shellexpand::tilde("~/.config/trackerclaw/autotag.toml").to_string();
     let path = Path::new(&config_path);
 
     if !path.exists() {
@@ -159,12 +159,12 @@ pub fn infer_tags_from_task_name(name: &str) -> Option<String> {
 
 /// Create default config file if it doesn't exist
 pub fn ensure_config_exists() -> Result<()> {
-    let config_dir = shellexpand::tilde("~/.config/opentracker").to_string();
+    let config_dir = shellexpand::tilde("~/.config/trackerclaw").to_string();
     std::fs::create_dir_all(&config_dir)?;
 
     let config_path = format!("{}/autotag.toml", config_dir);
     if !Path::new(&config_path).exists() {
-        let default_toml = r#"# Auto-tagging rules for OpenTracker
+        let default_toml = r#"# Auto-tagging rules for TrackerClaw
 # Match window titles against regex patterns to automatically assign tags
 # Each rule: pattern = regex, tags = comma-separated tags
 

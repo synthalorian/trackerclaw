@@ -1,3 +1,4 @@
+use crate::auth;
 use crate::budget;
 use crate::calendar;
 use crate::charts;
@@ -65,6 +66,8 @@ impl TuiState {
 }
 
 pub async fn run(db: &str) -> Result<()> {
+    let (user_id, _user_name, role) = auth::resolve_current_user(db, None)?;
+    let is_admin = role == "admin";
     let store = Store::open(std::path::Path::new(db))?;
     enable_raw_mode()?;
     let mut stdout = stdout();
@@ -73,18 +76,18 @@ pub async fn run(db: &str) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut state = TuiState::new();
-    let mut entries = store.list_today()?;
-    let mut daily_stats = store.daily_stats(7)?;
-    let mut project_stats = store.project_stats(30)?;
+    let mut entries = store.list_today(user_id, is_admin)?;
+    let mut daily_stats = store.daily_stats(7, user_id, is_admin)?;
+    let mut project_stats = store.project_stats(30, user_id, is_admin)?;
     let mut budgets = store.list_budgets()?;
 
     let mut last_refresh = Instant::now();
 
     loop {
         if last_refresh.elapsed() >= Duration::from_secs(10) {
-            entries = store.list_today()?;
-            daily_stats = store.daily_stats(7)?;
-            project_stats = store.project_stats(30)?;
+            entries = store.list_today(user_id, is_admin)?;
+            daily_stats = store.daily_stats(7, user_id, is_admin)?;
+            project_stats = store.project_stats(30, user_id, is_admin)?;
             budgets = store.list_budgets()?;
             last_refresh = Instant::now();
         }
@@ -92,10 +95,10 @@ pub async fn run(db: &str) -> Result<()> {
         // Idle detection check
         if state.idle_prompt == IdlePrompt::None && state.last_idle_check.elapsed() >= Duration::from_secs(30) {
             if let Some(ms) = idle::get_idle_time_ms() {
-                let is_idle = ms >= idle::IDLE_THRESHOLD_MS;
+                let is_idle = ms >= idle::idle_threshold_ms();
                 if is_idle && !state.was_idle {
                     // Just became idle - remember current entry if any
-                    if let Ok(Some(current)) = store.get_current() {
+                    if let Ok(Some(current)) = store.get_current(user_id) {
                         state.last_entry_name = Some(current.name);
                         state.last_entry_tags = current.tags;
                     }
@@ -127,7 +130,7 @@ pub async fn run(db: &str) -> Result<()> {
             let tabs = Paragraph::new(tabs_text)
                 .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
                 .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title("OpenTracker"));
+                .block(Block::default().borders(Borders::ALL).title("TrackerClaw"));
             f.render_widget(tabs, main_chunks[0]);
 
             match state.tab {
@@ -173,7 +176,7 @@ pub async fn run(db: &str) -> Result<()> {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
                             if let Some(ref name) = state.last_entry_name {
-                                let _ = store.start_entry(name, state.last_entry_tags.as_deref());
+                                let _ = store.start_entry(name, state.last_entry_tags.as_deref(), None, user_id);
                             }
                             state.idle_prompt = IdlePrompt::None;
                             state.last_entry_name = None;

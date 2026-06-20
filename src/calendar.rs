@@ -45,3 +45,23 @@ pub fn format_duration_short(seconds: i64) -> String {
         format!("{}s", seconds)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_seconds() {
+        assert_eq!(format_duration_short(45), "45s");
+    }
+
+    #[test]
+    fn format_minutes() {
+        assert_eq!(format_duration_short(300), "5m");
+    }
+
+    #[test]
+    fn format_hours() {
+        assert_eq!(format_duration_short(5400), "1.5h");
+    }
+}

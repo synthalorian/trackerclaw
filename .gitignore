@@ -1,1 +1,9 @@
 /target
+*.db
+*.db-journal
+.omo/
+.DS_Store
+*.swp
+*.swo
+*~
+

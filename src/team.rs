@@ -23,7 +23,7 @@ pub fn list_users(db: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn user_report(db: &str, user_name: &str, days: i64) -> Result<()> {
+pub fn user_report(db: &str, user_name: &str, days: i64, _user_id: i64, is_admin: bool) -> Result<()> {
     let store = Store::open(Path::new(db))?;
     let user = match store.get_user(user_name)? {
         Some(u) => u,
@@ -32,7 +32,8 @@ pub fn user_report(db: &str, user_name: &str, days: i64) -> Result<()> {
             return Ok(());
         }
     };
-    let entries = store.list_recent(days)?;
+    let is_target_admin = user.2 == "admin";
+    let entries = store.list_recent(days, user.0, is_target_admin || is_admin)?;
     let total: i64 = entries.iter().map(|e| e.duration_seconds.unwrap_or(0)).sum();
     let hours = total as f64 / 3600.0;
     println!("Report for {} (role: {})", user.1, user.2);
