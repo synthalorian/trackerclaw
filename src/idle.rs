@@ -29,11 +29,9 @@ pub fn get_idle_time_ms() -> Option<u64> {
         return Some(ms);
     }
 
-    // Strategy 3: Check /dev/input event files for last access time
-    if let Some(ms) = try_input_devices() {
-        return Some(ms);
-    }
-
+    // Note: there is intentionally no /dev/input fallback — device file
+    // mtimes do not track input events, so it produced garbage idle times
+    // and false auto-pauses.
     None
 }
 
@@ -65,38 +63,14 @@ fn try_x11_screensaver() -> Option<u64> {
     Some(reply.ms_since_user_input as u64)
 }
 
-fn try_input_devices() -> Option<u64> {
-    // Check the most recently modified /dev/input/event* file
-    let mut newest = None;
-    if let Ok(entries) = std::fs::read_dir("/dev/input") {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name_str = name.to_string_lossy();
-            if name_str.starts_with("event") {
-                if let Ok(meta) = entry.metadata() {
-                    if let Ok(modified) = meta.modified() {
-                        let age = modified.elapsed().unwrap_or(Duration::MAX);
-                        if let Some((_, best_age)) = newest {
-                            if age < best_age {
-                                newest = Some((name_str.to_string(), age));
-                            }
-                        } else {
-                            newest = Some((name_str.to_string(), age));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    newest.map(|(_, age)| age.as_millis() as u64)
-}
-
 /// Run idle detection loop. Auto-pauses tracking when user is idle.
 pub async fn run_idle_monitor(db_path: &str) -> Result<()> {
     let (user_id, _, _) = auth::resolve_current_user(db_path, None)?;
     let threshold = idle_threshold_ms();
-    println!("Idle monitor started. Threshold: {} min. Press Ctrl+C to stop.", threshold / 60000);
+    println!(
+        "Idle monitor started. Threshold: {} min. Press Ctrl+C to stop.",
+        threshold / 60000
+    );
 
     let mut check_interval = interval(Duration::from_secs(CHECK_INTERVAL_SECS));
     let mut was_idle = false;
@@ -144,11 +118,13 @@ pub async fn run_idle_monitor(db_path: &str) -> Result<()> {
                     if let Ok(store) = Store::open(Path::new(db_path)) {
                         if let Ok(Some(entry)) = store.get_current(user_id) {
                             if let Ok(started) = DateTime::parse_from_rfc3339(&entry.started_at) {
-                                let elapsed_minutes = (Utc::now() - started.with_timezone(&Utc)).num_minutes();
-                                if elapsed_minutes > 0 && elapsed_minutes % 60 == 0 {
-                                    if notified_milestones.insert((entry.id, elapsed_minutes)) {
-                                        notifications::notify_milestone(&entry.name, elapsed_minutes);
-                                    }
+                                let elapsed_minutes =
+                                    (Utc::now() - started.with_timezone(&Utc)).num_minutes();
+                                if elapsed_minutes > 0
+                                    && elapsed_minutes % 60 == 0
+                                    && notified_milestones.insert((entry.id, elapsed_minutes))
+                                {
+                                    notifications::notify_milestone(&entry.name, elapsed_minutes);
                                 }
                             }
                         } else {
@@ -177,11 +153,18 @@ pub fn check_idle_status() -> String {
             let secs = (ms % 60000) / 1000;
             let threshold = idle_threshold_ms();
             if ms >= threshold {
-                format!("Idle: {}m {}s (threshold: {}m)", mins, secs, threshold / 60000)
+                format!(
+                    "Idle: {}m {}s (threshold: {}m)",
+                    mins,
+                    secs,
+                    threshold / 60000
+                )
             } else {
                 format!("Active: {}m {}s since last input", mins, secs)
             }
         }
-        None => "Idle detection unavailable. Install xprintidle or ensure X11 is running.".to_string(),
+        None => {
+            "Idle detection unavailable. Install xprintidle or ensure X11 is running.".to_string()
+        }
     }
 }

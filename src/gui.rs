@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
-struct AppState {
+pub(crate) struct AppState {
     store: Arc<Mutex<Store>>,
     user_id: i64,
     is_admin: bool,
@@ -61,21 +61,29 @@ async fn index() -> Html<&'static str> {
 
 async fn today(State(state): State<AppState>) -> Result<Json<Vec<EntryResponse>>, String> {
     let store = state.store.lock().await;
-    let entries = store.list_today(state.user_id, state.is_admin).map_err(|e| e.to_string())?;
-    let resp: Vec<_> = entries.into_iter().map(|e| EntryResponse {
-        id: e.id,
-        name: e.name,
-        started_at: e.started_at,
-        duration: e.duration_seconds.unwrap_or(0),
-        tags: e.tags,
-    }).collect();
+    let entries = store
+        .list_today(state.user_id, state.is_admin)
+        .map_err(|e| e.to_string())?;
+    let resp: Vec<_> = entries
+        .into_iter()
+        .map(|e| EntryResponse {
+            id: e.id,
+            name: e.name,
+            started_at: e.started_at,
+            duration: e.duration_seconds.unwrap_or(0),
+            tags: e.tags,
+        })
+        .collect();
     Ok(Json(resp))
 }
 
 async fn daily_chart(State(state): State<AppState>) -> Result<Html<String>, String> {
     let store = state.store.lock().await;
-    let stats = store.daily_stats(14, state.user_id, state.is_admin).map_err(|e| e.to_string())?;
-    let data: Vec<(String, f64)> = stats.into_iter()
+    let stats = store
+        .daily_stats(14, state.user_id, state.is_admin)
+        .map_err(|e| e.to_string())?;
+    let data: Vec<(String, f64)> = stats
+        .into_iter()
         .map(|(day, seconds)| {
             let short_day = day.split('-').skip(1).collect::<Vec<_>>().join("-");
             (short_day, seconds as f64 / 3600.0)
@@ -87,8 +95,11 @@ async fn daily_chart(State(state): State<AppState>) -> Result<Html<String>, Stri
 
 async fn project_chart(State(state): State<AppState>) -> Result<Html<String>, String> {
     let store = state.store.lock().await;
-    let stats = store.project_stats(30, state.user_id, state.is_admin).map_err(|e| e.to_string())?;
-    let data: Vec<(String, i64)> = stats.into_iter()
+    let stats = store
+        .project_stats(30, state.user_id, state.is_admin)
+        .map_err(|e| e.to_string())?;
+    let data: Vec<(String, i64)> = stats
+        .into_iter()
         .filter(|(_, seconds)| *seconds > 0)
         .collect();
     let svg = crate::charts::pie_chart(&data, "Project Breakdown (Last 30 Days)", 700, 350);
@@ -97,15 +108,27 @@ async fn project_chart(State(state): State<AppState>) -> Result<Html<String>, St
 
 async fn stats_api(State(state): State<AppState>) -> Result<Json<serde_json::Value>, String> {
     let store = state.store.lock().await;
-    let daily = store.daily_stats(14, state.user_id, state.is_admin).map_err(|e| e.to_string())?;
-    let projects = store.project_stats(30, state.user_id, state.is_admin).map_err(|e| e.to_string())?;
+    let daily = store
+        .daily_stats(14, state.user_id, state.is_admin)
+        .map_err(|e| e.to_string())?;
+    let projects = store
+        .project_stats(30, state.user_id, state.is_admin)
+        .map_err(|e| e.to_string())?;
 
-    let daily_resp: Vec<DailyStat> = daily.into_iter()
-        .map(|(day, seconds)| DailyStat { day, hours: seconds as f64 / 3600.0 })
+    let daily_resp: Vec<DailyStat> = daily
+        .into_iter()
+        .map(|(day, seconds)| DailyStat {
+            day,
+            hours: seconds as f64 / 3600.0,
+        })
         .collect();
 
-    let project_resp: Vec<ProjectStat> = projects.into_iter()
-        .map(|(project, seconds)| ProjectStat { project, hours: seconds as f64 / 3600.0 })
+    let project_resp: Vec<ProjectStat> = projects
+        .into_iter()
+        .map(|(project, seconds)| ProjectStat {
+            project,
+            hours: seconds as f64 / 3600.0,
+        })
         .collect();
 
     Ok(Json(serde_json::json!({
@@ -116,7 +139,10 @@ async fn stats_api(State(state): State<AppState>) -> Result<Json<serde_json::Val
 
 async fn status(State(state): State<AppState>) -> Result<Json<StatusResponse>, String> {
     let store = state.store.lock().await;
-    match store.get_current(state.user_id).map_err(|e| e.to_string())? {
+    match store
+        .get_current(state.user_id)
+        .map_err(|e| e.to_string())?
+    {
         Some(entry) => {
             let started = chrono::DateTime::parse_from_rfc3339(&entry.started_at)
                 .map(|d| d.with_timezone(&Utc))
@@ -145,16 +171,31 @@ async fn start_timer(
     Json(req): Json<StartRequest>,
 ) -> Result<Json<serde_json::Value>, String> {
     let store = state.store.lock().await;
-    if store.get_current(state.user_id).map_err(|e| e.to_string())?.is_some() {
+    let name = req.name.trim().to_string();
+    if name.is_empty() {
+        return Err("Task name must not be empty.".to_string());
+    }
+    if store
+        .get_current(state.user_id)
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
         return Ok(Json(serde_json::json!({"error": "Already tracking"})));
     }
-    let id = store.start_entry(&req.name, req.tags.as_deref(), None, state.user_id).map_err(|e| e.to_string())?;
-    Ok(Json(serde_json::json!({"id": id, "name": req.name, "tags": req.tags})))
+    let id = store
+        .start_entry(&name, req.tags.as_deref(), None, state.user_id)
+        .map_err(|e| e.to_string())?;
+    Ok(Json(
+        serde_json::json!({"id": id, "name": name, "tags": req.tags}),
+    ))
 }
 
 async fn stop_timer(State(state): State<AppState>) -> Result<Json<EntryResponse>, String> {
     let store = state.store.lock().await;
-    match store.stop_current(state.user_id).map_err(|e| e.to_string())? {
+    match store
+        .stop_current(state.user_id)
+        .map_err(|e| e.to_string())?
+    {
         Some(entry) => Ok(Json(EntryResponse {
             id: entry.id,
             name: entry.name,
@@ -164,6 +205,19 @@ async fn stop_timer(State(state): State<AppState>) -> Result<Json<EntryResponse>
         })),
         None => Err("Nothing is being tracked.".to_string()),
     }
+}
+
+pub(crate) fn build_router(state: AppState) -> Router {
+    Router::new()
+        .route("/", get(index))
+        .route("/api/today", get(today))
+        .route("/api/stats", get(stats_api))
+        .route("/api/status", get(status))
+        .route("/api/start", post(start_timer))
+        .route("/api/stop", post(stop_timer))
+        .route("/chart/daily", get(daily_chart))
+        .route("/chart/projects", get(project_chart))
+        .with_state(state)
 }
 
 pub async fn run(db: &str, bind: &str) -> Result<()> {
@@ -176,16 +230,7 @@ pub async fn run(db: &str, bind: &str) -> Result<()> {
         is_admin,
     };
 
-    let app = Router::new()
-        .route("/", get(index))
-        .route("/api/today", get(today))
-        .route("/api/stats", get(stats_api))
-        .route("/api/status", get(status))
-        .route("/api/start", post(start_timer))
-        .route("/api/stop", post(stop_timer))
-        .route("/chart/daily", get(daily_chart))
-        .route("/chart/projects", get(project_chart))
-        .with_state(state);
+    let app = build_router(state);
 
     println!("TrackerClaw dashboard at http://{}", bind);
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -200,7 +245,6 @@ const INDEX_HTML: &str = r#"
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TrackerClaw Dashboard</title>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
 :root {
   --bg: #0a0514;
@@ -307,6 +351,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 .chip:hover { background: rgba(143, 0, 255, 0.35); border-color: var(--magenta); }
 
 .chart-box h3 { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 1rem; }
+.svg-chart { display: flex; justify-content: center; overflow-x: auto; }
 .entries h3 { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 1rem; }
 .entry {
   display: flex;
@@ -369,19 +414,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
 <div class="grid">
   <div class="card chart-box">
     <h3>Daily Hours (Last 14 Days)</h3>
-    <canvas id="dailyChart"></canvas>
+    <div id="dailyChart" class="svg-chart">Loading...</div>
   </div>
   <div class="card chart-box">
     <h3>Project Breakdown (Last 30 Days)</h3>
-    <canvas id="projectChart"></canvas>
+    <div id="projectChart" class="svg-chart">Loading...</div>
   </div>
 </div>
 
 <script>
 let active = false;
 let elapsedInterval = null;
-let dailyChart = null;
-let projectChart = null;
 
 function formatTime(totalSeconds) {
   const h = Math.floor(totalSeconds / 3600).toString().padStart(2, '0');
@@ -475,59 +518,14 @@ async function refreshEntries() {
 }
 
 async function refreshCharts() {
+  // Charts are server-rendered SVG: no external JS, no CDN, fully local.
   try {
-    const r = await fetch('/api/stats');
-    const s = await r.json();
-    const labels = s.daily.map(d => d.day.split('-').slice(1).join('-'));
-    const dailyData = s.daily.map(d => d.hours);
-    const projectLabels = s.projects.map(p => p.project);
-    const projectData = s.projects.map(p => p.hours);
-
-    const colors = ['#00f0ff', '#ff00ff', '#f3e70f', '#8f00ff', '#00ff88', '#ff4444', '#ff8800'];
-
-    if (dailyChart) dailyChart.destroy();
-    dailyChart = new Chart(document.getElementById('dailyChart'), {
-      type: 'bar',
-      data: {
-        labels,
-        datasets: [{
-          label: 'Hours',
-          data: dailyData,
-          backgroundColor: 'rgba(0, 240, 255, 0.7)',
-          borderColor: '#00f0ff',
-          borderWidth: 1,
-          borderRadius: 6
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          y: { grid: { color: 'rgba(255,255,255,0.08)' }, ticks: { color: '#9b94b0' } },
-          x: { grid: { display: false }, ticks: { color: '#9b94b0' } }
-        }
-      }
-    });
-
-    if (projectChart) projectChart.destroy();
-    projectChart = new Chart(document.getElementById('projectChart'), {
-      type: 'doughnut',
-      data: {
-        labels: projectLabels,
-        datasets: [{
-          data: projectData,
-          backgroundColor: colors,
-          borderColor: '#0a0514',
-          borderWidth: 2
-        }]
-      },
-      options: {
-        responsive: true,
-        plugins: {
-          legend: { position: 'right', labels: { color: '#e8e6f0' } }
-        }
-      }
-    });
+    const [daily, projects] = await Promise.all([
+      fetch('/chart/daily').then(r => r.text()),
+      fetch('/chart/projects').then(r => r.text())
+    ]);
+    document.getElementById('dailyChart').innerHTML = daily;
+    document.getElementById('projectChart').innerHTML = projects;
   } catch (e) {
     console.error('charts failed', e);
   }
@@ -555,3 +553,225 @@ refreshAll();
 </body>
 </html>
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    struct TestServer {
+        base: String,
+        db: std::path::PathBuf,
+    }
+
+    async fn spawn_server() -> TestServer {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        let db = std::env::temp_dir().join(format!(
+            "trackerclaw_gui_test_{}_{}.db",
+            std::process::id(),
+            n
+        ));
+        let store = Store::open(&db).unwrap();
+        let state = AppState {
+            store: Arc::new(Mutex::new(store)),
+            user_id: 1,
+            is_admin: true,
+        };
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        TestServer {
+            base: format!("http://{}", addr),
+            db,
+        }
+    }
+
+    impl Drop for TestServer {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.db);
+            let _ = std::fs::remove_file(self.db.with_extension("db-wal"));
+            let _ = std::fs::remove_file(self.db.with_extension("db-shm"));
+        }
+    }
+
+    #[tokio::test]
+    async fn index_serves_dashboard_without_cdn() {
+        let srv = spawn_server().await;
+        let body = reqwest::get(format!("{}/", srv.base))
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(body.contains("TRACKERCLAW"));
+        // Privacy: no external scripts or CDN references.
+        assert!(
+            !body.contains("http://") && !body.contains("https://"),
+            "dashboard must not reference external resources"
+        );
+    }
+
+    #[tokio::test]
+    async fn start_status_stop_flow() {
+        let srv = spawn_server().await;
+        let client = reqwest::Client::new();
+
+        let status: serde_json::Value = client
+            .get(format!("{}/api/status", srv.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(status["active"], false);
+
+        let started: serde_json::Value = client
+            .post(format!("{}/api/start", srv.base))
+            .json(&serde_json::json!({"name": "smoke test", "tags": "test"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert!(started["id"].is_number());
+
+        let status: serde_json::Value = client
+            .get(format!("{}/api/status", srv.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(status["active"], true);
+        assert_eq!(status["name"], "smoke test");
+        assert!(status["elapsed_seconds"].as_i64().unwrap() >= 0);
+
+        // Second start while tracking is rejected.
+        let again: serde_json::Value = client
+            .post(format!("{}/api/start", srv.base))
+            .json(&serde_json::json!({"name": "double"}))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(again["error"], "Already tracking");
+
+        let stopped: serde_json::Value = client
+            .post(format!("{}/api/stop", srv.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(stopped["name"], "smoke test");
+        assert!(stopped["duration"].as_i64().unwrap() >= 0);
+
+        // Stopping with nothing running is an error.
+        let resp = client
+            .post(format!("{}/api/stop", srv.base))
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_client_error()
+                || resp.status().is_server_error()
+                || resp.text().await.unwrap().contains("Nothing")
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_task_name_rejected() {
+        let srv = spawn_server().await;
+        let client = reqwest::Client::new();
+        let resp = client
+            .post(format!("{}/api/start", srv.base))
+            .json(&serde_json::json!({"name": "   "}))
+            .send()
+            .await
+            .unwrap();
+        let body = resp.text().await.unwrap();
+        assert!(
+            body.contains("empty"),
+            "expected empty-name rejection, got: {}",
+            body
+        );
+    }
+
+    #[tokio::test]
+    async fn stats_and_charts_render() {
+        let srv = spawn_server().await;
+        {
+            let store = Store::open(&srv.db).unwrap();
+            let now = Utc::now();
+            store
+                .insert_completed_entry(
+                    "seed",
+                    Some("rust"),
+                    None,
+                    now - chrono::Duration::hours(2),
+                    now - chrono::Duration::hours(1),
+                    3600,
+                    1,
+                )
+                .unwrap();
+        }
+        let client = reqwest::Client::new();
+
+        let stats: serde_json::Value = client
+            .get(format!("{}/api/stats", srv.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let daily_total: f64 = stats["daily"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|d| d["hours"].as_f64().unwrap())
+            .sum();
+        assert!((daily_total - 1.0).abs() < 1e-9);
+
+        let today: serde_json::Value = client
+            .get(format!("{}/api/today", srv.base))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        assert_eq!(today.as_array().unwrap().len(), 1);
+
+        let daily_svg = client
+            .get(format!("{}/chart/daily", srv.base))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(daily_svg.contains("<svg"));
+
+        let project_svg = client
+            .get(format!("{}/chart/projects", srv.base))
+            .send()
+            .await
+            .unwrap()
+            .text()
+            .await
+            .unwrap();
+        assert!(project_svg.contains("<svg"));
+    }
+}

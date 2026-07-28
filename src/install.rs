@@ -1,5 +1,4 @@
-use anyhow::{bail, Result};
-use std::path::Path;
+use anyhow::Result;
 use std::process::Command;
 
 fn current_exe() -> Result<std::path::PathBuf> {
@@ -42,13 +41,21 @@ pub fn install() -> Result<()> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::copy(&src, &dest)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&dest)?.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(&dest, perms)?;
+
+    // Guard against copying the binary onto itself (would truncate it).
+    let src_canon = src.canonicalize().unwrap_or_else(|_| src.clone());
+    let dest_canon = dest.canonicalize().unwrap_or_else(|_| dest.clone());
+    if src_canon == dest_canon {
+        println!("  Binary already in place, skipping copy.");
+    } else {
+        std::fs::copy(&src, &dest)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&dest)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&dest, perms)?;
+        }
     }
 
     install_service(&dest)?;
@@ -115,8 +122,6 @@ pub fn uninstall() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn service_unit_contains_exec_start() {
         let unit = format!(

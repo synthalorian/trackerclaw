@@ -9,16 +9,10 @@ pub struct TagRule {
     pub tags: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct TagConfig {
     #[serde(default)]
     pub rules: Vec<TagRule>,
-}
-
-impl Default for TagConfig {
-    fn default() -> Self {
-        Self { rules: Vec::new() }
-    }
 }
 
 /// Load tag rules from config file
@@ -32,17 +26,21 @@ pub fn load_config() -> TagConfig {
     }
 
     match std::fs::read_to_string(path) {
-        Ok(content) => {
-            match toml::from_str::<TagConfig>(&content) {
-                Ok(config) => config,
-                Err(e) => {
-                    eprintln!("Warning: Failed to parse autotag config: {}. Using defaults.", e);
-                    default_config()
-                }
+        Ok(content) => match toml::from_str::<TagConfig>(&content) {
+            Ok(config) => config,
+            Err(e) => {
+                eprintln!(
+                    "Warning: Failed to parse autotag config: {}. Using defaults.",
+                    e
+                );
+                default_config()
             }
-        }
+        },
         Err(e) => {
-            eprintln!("Warning: Failed to read autotag config: {}. Using defaults.", e);
+            eprintln!(
+                "Warning: Failed to read autotag config: {}. Using defaults.",
+                e
+            );
             default_config()
         }
     }
@@ -51,13 +49,34 @@ pub fn load_config() -> TagConfig {
 fn default_config() -> TagConfig {
     TagConfig {
         rules: vec![
-            TagRule { pattern: r"(?i)firefox|chrome|chromium|brave|safari".to_string(), tags: "web,browsing".to_string() },
-            TagRule { pattern: r"(?i)code\.exe|visual studio code|vscodium|cursor".to_string(), tags: "coding,dev".to_string() },
-            TagRule { pattern: r"(?i)terminal|alacritty|kitty|ghostty|wezterm|tmux".to_string(), tags: "terminal,cli".to_string() },
-            TagRule { pattern: r"(?i)discord|slack|teams|zoom|meet".to_string(), tags: "communication".to_string() },
-            TagRule { pattern: r"(?i)gimp|photoshop|figma|inkscape|blender".to_string(), tags: "design".to_string() },
-            TagRule { pattern: r"(?i)rust|cargo\.toml|\.rs".to_string(), tags: "rust".to_string() },
-            TagRule { pattern: r"(?i)go\.mod|\.go".to_string(), tags: "golang".to_string() },
+            TagRule {
+                pattern: r"(?i)firefox|chrome|chromium|brave|safari".to_string(),
+                tags: "web,browsing".to_string(),
+            },
+            TagRule {
+                pattern: r"(?i)code\.exe|visual studio code|vscodium|cursor".to_string(),
+                tags: "coding,dev".to_string(),
+            },
+            TagRule {
+                pattern: r"(?i)terminal|alacritty|kitty|ghostty|wezterm|tmux".to_string(),
+                tags: "terminal,cli".to_string(),
+            },
+            TagRule {
+                pattern: r"(?i)discord|slack|teams|zoom|meet".to_string(),
+                tags: "communication".to_string(),
+            },
+            TagRule {
+                pattern: r"(?i)gimp|photoshop|figma|inkscape|blender".to_string(),
+                tags: "design".to_string(),
+            },
+            TagRule {
+                pattern: r"(?i)rust|cargo\.toml|\.rs".to_string(),
+                tags: "rust".to_string(),
+            },
+            TagRule {
+                pattern: r"(?i)go\.mod|\.go".to_string(),
+                tags: "golang".to_string(),
+            },
         ],
     }
 }
@@ -102,8 +121,24 @@ fn try_x11() -> Option<String> {
     let screen = &conn.setup().roots[screen_num];
 
     // Get _NET_ACTIVE_WINDOW property
-    let active_window_prop = conn.intern_atom(false, b"_NET_ACTIVE_WINDOW").ok()?.reply().ok()?.atom;
-    let reply = conn.get_property(false, screen.root, active_window_prop, AtomEnum::WINDOW, 0, 1).ok()?.reply().ok()?;
+    let active_window_prop = conn
+        .intern_atom(false, b"_NET_ACTIVE_WINDOW")
+        .ok()?
+        .reply()
+        .ok()?
+        .atom;
+    let reply = conn
+        .get_property(
+            false,
+            screen.root,
+            active_window_prop,
+            AtomEnum::WINDOW,
+            0,
+            1,
+        )
+        .ok()?
+        .reply()
+        .ok()?;
 
     if reply.value_len == 0 {
         return None;
@@ -113,7 +148,11 @@ fn try_x11() -> Option<String> {
 
     // Get WM_NAME property
     let wm_name = conn.intern_atom(false, b"WM_NAME").ok()?.reply().ok()?.atom;
-    let name_reply = conn.get_property(false, window, wm_name, AtomEnum::STRING, 0, 1024).ok()?.reply().ok()?;
+    let name_reply = conn
+        .get_property(false, window, wm_name, AtomEnum::STRING, 0, 1024)
+        .ok()?
+        .reply()
+        .ok()?;
 
     if name_reply.value_len > 0 {
         String::from_utf8(name_reply.value).ok()

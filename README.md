@@ -94,10 +94,13 @@ trackerclaw gui
 Features:
 - **Start/Stop Timer** — control tracking directly from the browser
 - **Live Session Display** — current task + running elapsed time
-- **Daily Hours Chart** — Chart.js bar chart for the last 14 days
-- **Project Breakdown** — Chart.js doughnut chart by tag
+- **Daily Hours Chart** — server-rendered SVG bar chart for the last 14 days
+- **Project Breakdown** — server-rendered SVG pie chart by tag
 - **Today's Entries** — live-updating list with durations
 - **Glassmorphism synthwave UI** — neon cyan, magenta, and purple accents
+
+All charts are rendered as SVG on the server. The dashboard loads **zero external
+resources** (no CDNs, no third-party JS) — everything is served from localhost.
 
 ## TUI Charts
 
@@ -130,7 +133,6 @@ trackerclaw idle-status
 Idle detection works by checking input device activity. It supports:
 - `xprintidle` command (recommended — install with `pacman -S xprintidle`)
 - X11 screensaver extension
-- `/dev/input` event files (fallback)
 
 Default idle threshold: **5 minutes**
 
@@ -306,6 +308,25 @@ The interactive TUI now includes:
 - **Press `4`** — Calendar view (month grid with highlighted days)
 - **Projects tab** — Shows budget progress bars alongside project breakdown
 - **Idle notifications** — Desktop notifications when idle is detected
+
+## Behavior Notes (the fine print, honestly)
+
+- **Starting a new task auto-stops the current one.** An entry can never be left
+  running invisibly; `stop` also recovers any orphaned open entry.
+- **Durations are clamped at zero** — clock skew can never produce negative time.
+- **"Today" means your local calendar day.** Charts aggregate entries by the day
+  they *started* (UTC), so an entry crossing midnight counts toward its start day.
+- **Pomodoro logging** — completed focus phases log the full configured length;
+  quitting early logs actual focused time (pauses excluded) if at least 1 minute
+  accumulated.
+- **Budgets** match entries by project *and* by tag containing the project name.
+- **Team mode is local and honor-system**: roles gate CLI/web filtering, but
+  there is no authentication — anyone with file access to the DB is admin of
+  their own machine. It exists for separating contexts (e.g. work/personal),
+  not for adversarial multi-user security.
+- **Outbound network access** happens only when you explicitly configure it:
+  webhook delivery on `stop`, and the Toggl/Clockify integrations. Everything
+  else is local-only.
 
 ## Roadmap
 

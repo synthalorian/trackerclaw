@@ -25,6 +25,7 @@ pub struct Invoice {
     pub rate: f64,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn generate_invoice(
     db: &str,
     client: &str,
@@ -68,7 +69,9 @@ pub fn generate_invoice(
     }
 
     let period_end = Utc::now().format("%Y-%m-%d").to_string();
-    let period_start = (Utc::now() - chrono::Duration::days(days)).format("%Y-%m-%d").to_string();
+    let period_start = (Utc::now() - chrono::Duration::days(days))
+        .format("%Y-%m-%d")
+        .to_string();
 
     Ok(Invoice {
         client: client.to_string(),
@@ -80,6 +83,21 @@ pub fn generate_invoice(
         rate,
         entries: invoice_entries,
     })
+}
+
+/// Escape user-controlled text for HTML output (task names, client names
+/// and tags come straight from the database / CLI).
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// Escape pipe characters so task names can't break markdown tables.
+fn md_escape(s: &str) -> String {
+    s.replace('|', "\\|")
 }
 
 pub fn render_html_invoice(invoice: &Invoice) -> String {
@@ -94,7 +112,12 @@ pub fn render_html_invoice(invoice: &Invoice) -> String {
                 <td>${:.2}</td>
                 <td>${:.2}</td>
             </tr>"#,
-            entry.date, entry.description, entry.tags, entry.hours, entry.rate, entry.amount
+            html_escape(&entry.date),
+            html_escape(&entry.description),
+            html_escape(&entry.tags),
+            entry.hours,
+            entry.rate,
+            entry.amount
         ));
     }
 
@@ -292,12 +315,12 @@ pub fn render_html_invoice(invoice: &Invoice) -> String {
 </div>
 </body>
 </html>"#,
-        invoice.client,
+        html_escape(&invoice.client),
         invoice.invoice_date.replace("-", ""),
         invoice.invoice_date,
         invoice.period_start,
         invoice.period_end,
-        invoice.client,
+        html_escape(&invoice.client),
         rows,
         invoice.total_hours,
         invoice.total_amount,
@@ -309,12 +332,15 @@ pub fn render_html_invoice(invoice: &Invoice) -> String {
 
 pub fn render_markdown_invoice(invoice: &Invoice) -> String {
     let mut lines = Vec::new();
-    lines.push(format!("# Invoice — {}", invoice.client));
+    lines.push(format!("# Invoice — {}", md_escape(&invoice.client)));
     lines.push(String::new());
     lines.push(format!("- **Invoice Date:** {}", invoice.invoice_date));
-    lines.push(format!("- **Period:** {} — {}", invoice.period_start, invoice.period_end));
+    lines.push(format!(
+        "- **Period:** {} — {}",
+        invoice.period_start, invoice.period_end
+    ));
     lines.push(String::new());
-    lines.push(format!("## Bill To\n\n{}", invoice.client));
+    lines.push(format!("## Bill To\n\n{}", md_escape(&invoice.client)));
     lines.push(String::new());
     lines.push("| Date | Description | Tags | Hours | Rate | Amount |".to_string());
     lines.push("|------|-------------|------|-------|------|--------|".to_string());
@@ -322,7 +348,12 @@ pub fn render_markdown_invoice(invoice: &Invoice) -> String {
     for entry in &invoice.entries {
         lines.push(format!(
             "| {} | {} | {} | {:.2} | ${:.2} | ${:.2} |",
-            entry.date, entry.description, entry.tags, entry.hours, entry.rate, entry.amount
+            entry.date,
+            md_escape(&entry.description),
+            md_escape(&entry.tags),
+            entry.hours,
+            entry.rate,
+            entry.amount
         ));
     }
 
@@ -344,6 +375,7 @@ pub fn render_markdown_invoice(invoice: &Invoice) -> String {
     lines.join("\n")
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn generate_invoice_file(
     db: &str,
     client: &str,
@@ -356,7 +388,8 @@ pub async fn generate_invoice_file(
     output: &std::path::Path,
 ) -> Result<()> {
     let invoice = generate_invoice(db, client, rate, days, tag, project, user_id, is_admin)?;
-    let is_markdown = output.extension()
+    let is_markdown = output
+        .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
         .unwrap_or(false);
@@ -370,8 +403,163 @@ pub async fn generate_invoice_file(
     std::fs::write(output, content)?;
     println!("Invoice generated: {}", output.display());
     println!("  Client: {}", invoice.client);
-    println!("  Period: {} — {}", invoice.period_start, invoice.period_end);
+    println!(
+        "  Period: {} — {}",
+        invoice.period_start, invoice.period_end
+    );
     println!("  Hours:  {:.2}h", invoice.total_hours);
     println!("  Total:  ${:.2}", invoice.total_amount);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_db() -> std::path::PathBuf {
+        let n = COUNTER.fetch_add(1, Ordering::SeqCst);
+        std::env::temp_dir().join(format!(
+            "trackerclaw_inv_test_{}_{}.db",
+            std::process::id(),
+            n
+        ))
+    }
+
+    #[test]
+    fn invoice_totals_match_tracked_time() {
+        let db = temp_db();
+        {
+            let store = Store::open(&db).unwrap();
+            let now = Utc::now();
+            store
+                .insert_completed_entry(
+                    "work a",
+                    Some("rust"),
+                    None,
+                    now - Duration::hours(3),
+                    now - Duration::hours(2),
+                    3600,
+                    1,
+                )
+                .unwrap();
+            store
+                .insert_completed_entry(
+                    "work b",
+                    Some("rust"),
+                    None,
+                    now - Duration::hours(2),
+                    now - Duration::hours(1),
+                    1800,
+                    1,
+                )
+                .unwrap();
+        }
+        let inv = generate_invoice(
+            db.to_str().unwrap(),
+            "Acme",
+            100.0,
+            7,
+            Some("rust"),
+            None,
+            1,
+            true,
+        )
+        .unwrap();
+        assert_eq!(inv.entries.len(), 2);
+        assert!((inv.total_hours - 1.5).abs() < 1e-9);
+        assert!((inv.total_amount - 150.0).abs() < 1e-9);
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn invoice_respects_user_scope() {
+        let db = temp_db();
+        {
+            let store = Store::open(&db).unwrap();
+            let now = Utc::now();
+            store
+                .insert_completed_entry("mine", None, None, now - Duration::hours(1), now, 3600, 2)
+                .unwrap();
+            store
+                .insert_completed_entry(
+                    "not mine",
+                    None,
+                    None,
+                    now - Duration::hours(1),
+                    now,
+                    3600,
+                    1,
+                )
+                .unwrap();
+        }
+        let inv =
+            generate_invoice(db.to_str().unwrap(), "Acme", 100.0, 7, None, None, 2, false).unwrap();
+        assert_eq!(inv.entries.len(), 1);
+        assert_eq!(inv.entries[0].description, "mine");
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn html_output_escapes_user_input() {
+        let db = temp_db();
+        {
+            let store = Store::open(&db).unwrap();
+            let now = Utc::now();
+            store
+                .insert_completed_entry(
+                    "<script>alert(1)</script>",
+                    None,
+                    None,
+                    now - Duration::hours(1),
+                    now,
+                    3600,
+                    1,
+                )
+                .unwrap();
+        }
+        let inv = generate_invoice(
+            db.to_str().unwrap(),
+            "Evil <b>Client</b>",
+            100.0,
+            7,
+            None,
+            None,
+            1,
+            true,
+        )
+        .unwrap();
+        let html = render_html_invoice(&inv);
+        assert!(!html.contains("<script>alert(1)</script>"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(html.contains("Evil &lt;b&gt;Client&lt;/b&gt;"));
+        let _ = std::fs::remove_file(&db);
+    }
+
+    #[test]
+    fn markdown_output_escapes_pipes() {
+        let inv = Invoice {
+            client: "Acme|Corp".to_string(),
+            invoice_date: "2026-07-28".to_string(),
+            period_start: "2026-07-01".to_string(),
+            period_end: "2026-07-28".to_string(),
+            entries: vec![InvoiceEntry {
+                date: "2026-07-02".to_string(),
+                description: "a|b".to_string(),
+                tags: String::new(),
+                hours: 1.0,
+                rate: 100.0,
+                amount: 100.0,
+            }],
+            total_hours: 1.0,
+            total_amount: 100.0,
+            rate: 100.0,
+        };
+        let md = render_markdown_invoice(&inv);
+        assert!(md.contains("a\\|b"));
+        assert!(md.contains("Acme\\|Corp"));
+    }
 }

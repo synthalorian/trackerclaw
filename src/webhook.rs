@@ -1,5 +1,5 @@
-use anyhow::Result;
 use crate::store::{Entry, Store};
+use anyhow::Result;
 use std::path::Path;
 
 pub async fn send_webhook(db: &str, entry: &Entry) -> Result<()> {
@@ -8,10 +8,12 @@ pub async fn send_webhook(db: &str, entry: &Entry) -> Result<()> {
         if !enabled {
             return Ok(());
         }
-        
-        let client = reqwest::Client::new();
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()?;
         let mut req = client.post(&url).json(&entry);
-        
+
         if let Some(h) = headers {
             for line in h.lines() {
                 if let Some((key, value)) = line.split_once(':') {
@@ -19,7 +21,7 @@ pub async fn send_webhook(db: &str, entry: &Entry) -> Result<()> {
                 }
             }
         }
-        
+
         req.send().await?;
     }
     Ok(())

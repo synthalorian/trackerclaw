@@ -18,7 +18,7 @@ use ratatui::{
 use std::io::{self, stdout};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Phase {
     Work,
     Break,
@@ -39,7 +39,14 @@ struct PomodoroState {
 impl PomodoroState {
     fn new(task_name: String) -> Self {
         let cfg = config::load_config();
-        let work_seconds = cfg.pomodoro_work_minutes * 60;
+        Self::with_durations(
+            task_name,
+            cfg.pomodoro_work_minutes * 60,
+            cfg.pomodoro_break_minutes * 60,
+        )
+    }
+
+    fn with_durations(task_name: String, work_seconds: u64, break_seconds: u64) -> Self {
         let total = Duration::from_secs(work_seconds);
         Self {
             phase: Phase::Work,
@@ -50,7 +57,7 @@ impl PomodoroState {
             running: true,
             done: false,
             work_seconds,
-            break_seconds: cfg.pomodoro_break_minutes * 60,
+            break_seconds,
         }
     }
 
@@ -65,6 +72,21 @@ impl PomodoroState {
         } else {
             self.remaining = self.total - elapsed;
         }
+    }
+
+    /// Pause or resume. On resume, rebase `start` so the paused wall time
+    /// does not count against the remaining focus time.
+    fn toggle_pause(&mut self) {
+        self.running = !self.running;
+        if self.running {
+            let elapsed = self.total.saturating_sub(self.remaining);
+            self.start = Instant::now() - elapsed;
+        }
+    }
+
+    /// Seconds of actual focus time accumulated in the current work phase.
+    fn focused_seconds(&self) -> u64 {
+        self.total.saturating_sub(self.remaining).as_secs()
     }
 
     fn transition_to_break(&mut self) {
@@ -82,7 +104,7 @@ impl PomodoroState {
     }
 }
 
-pub async fn run(db: &str, task_name: Option<String>) -> Result<()> {
+pub async fn run(db: &str, task_name: Option<String>, user_id: i64) -> Result<()> {
     let task = task_name.unwrap_or_else(|| "Pomodoro session".to_string());
     let mut state = PomodoroState::new(task.clone());
 
@@ -118,7 +140,11 @@ pub async fn run(db: &str, task_name: Option<String>) -> Result<()> {
             };
 
             let title = Paragraph::new(phase_text)
-                .style(Style::default().fg(phase_color).add_modifier(Modifier::BOLD))
+                .style(
+                    Style::default()
+                        .fg(phase_color)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL));
             f.render_widget(title, chunks[0]);
@@ -127,11 +153,18 @@ pub async fn run(db: &str, task_name: Option<String>) -> Result<()> {
                 Span::styled("Task: ", Style::default().fg(Color::Yellow)),
                 Span::raw(&state.task_name),
             ]);
-            f.render_widget(Paragraph::new(task_line).alignment(Alignment::Center), chunks[1]);
+            f.render_widget(
+                Paragraph::new(task_line).alignment(Alignment::Center),
+                chunks[1],
+            );
 
             let timer_text = PomodoroState::fmt_time(state.remaining);
             let timer = Paragraph::new(timer_text)
-                .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+                .style(
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL));
             f.render_widget(timer, chunks[2]);
@@ -179,12 +212,7 @@ pub async fn run(db: &str, task_name: Option<String>) -> Result<()> {
                             if state.done && state.phase == Phase::Work {
                                 state.transition_to_break();
                             } else {
-                                state.running = !state.running;
-                                if state.running {
-                                    // Adjust start so remaining is correct
-                                    let elapsed = state.total.saturating_sub(state.remaining);
-                                    state.start = Instant::now() - elapsed;
-                                }
+                                state.toggle_pause();
                             }
                         }
                         _ => {}
@@ -197,16 +225,108 @@ pub async fn run(db: &str, task_name: Option<String>) -> Result<()> {
     disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
 
-    // Log the pomodoro work session to the database if work phase completed
-    if state.phase == Phase::Break || (state.phase == Phase::Work && state.done) {
+    // Log the focus time to the database. Completed work phases log the
+    // full configured length; quitting early logs actual focused seconds
+    // (pauses excluded) if at least a minute accumulated.
+    let focused = if state.phase == Phase::Work {
+        state.focused_seconds()
+    } else {
+        state.work_seconds
+    };
+    if focused >= 60 {
         let store = Store::open(std::path::Path::new(db))?;
         let name = format!("Pomodoro: {}", task);
-        let started = Utc::now() - chrono::Duration::seconds(state.work_seconds as i64);
         let ended = Utc::now();
-        let duration = (ended - started).num_seconds();
-        store.insert_completed_entry(&name, Some("pomodoro"), None, started, ended, duration)?;
-        println!("Logged Pomodoro session ({}s)", duration);
+        let started = ended - chrono::Duration::seconds(focused as i64);
+        store.insert_completed_entry(
+            &name,
+            Some("pomodoro"),
+            None,
+            started,
+            ended,
+            focused as i64,
+            user_id,
+        )?;
+        println!("Logged Pomodoro session ({}s)", focused);
+    } else {
+        println!("Pomodoro too short to log ({}s focused).", focused);
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fmt_time_formats_mm_ss() {
+        assert_eq!(PomodoroState::fmt_time(Duration::from_secs(0)), "00:00");
+        assert_eq!(PomodoroState::fmt_time(Duration::from_secs(65)), "01:05");
+        assert_eq!(PomodoroState::fmt_time(Duration::from_secs(1500)), "25:00");
+    }
+
+    #[test]
+    fn zero_length_work_phase_completes_immediately() {
+        let mut s = PomodoroState::with_durations("t".into(), 0, 300);
+        s.tick();
+        assert!(s.done);
+        assert_eq!(s.remaining, Duration::ZERO);
+        assert_eq!(s.phase, Phase::Work);
+    }
+
+    #[test]
+    fn work_to_break_transition_resets_state() {
+        let mut s = PomodoroState::with_durations("t".into(), 0, 0);
+        s.tick();
+        assert!(s.done);
+        s.transition_to_break();
+        assert_eq!(s.phase, Phase::Break);
+        assert!(!s.done);
+        assert!(s.running);
+        s.tick();
+        assert!(s.done, "zero-length break completes immediately");
+    }
+
+    #[test]
+    fn pause_freezes_remaining_and_resume_rebases() {
+        let mut s = PomodoroState::with_durations("t".into(), 60, 60);
+        std::thread::sleep(Duration::from_millis(20));
+        s.tick();
+        let remaining_at_pause = s.remaining;
+        s.toggle_pause();
+        assert!(!s.running);
+        std::thread::sleep(Duration::from_millis(20));
+        s.tick(); // no-op while paused
+        assert_eq!(
+            s.remaining, remaining_at_pause,
+            "paused time must not consume remaining"
+        );
+
+        s.toggle_pause();
+        assert!(s.running);
+        std::thread::sleep(Duration::from_millis(20));
+        s.tick();
+        // After resume, only ~20ms more should have been consumed.
+        assert!(s.remaining <= remaining_at_pause);
+        assert!(remaining_at_pause - s.remaining < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn done_state_is_sticky() {
+        let mut s = PomodoroState::with_durations("t".into(), 0, 60);
+        s.tick();
+        let r = s.remaining;
+        s.tick();
+        assert_eq!(s.remaining, r);
+        assert!(s.done);
+    }
+
+    #[test]
+    fn focused_seconds_counts_down_from_total() {
+        let mut s = PomodoroState::with_durations("t".into(), 120, 60);
+        assert_eq!(s.focused_seconds(), 0);
+        s.remaining = Duration::from_secs(30);
+        assert_eq!(s.focused_seconds(), 90);
+    }
 }

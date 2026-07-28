@@ -16,7 +16,10 @@ pub fn parse_date(date_str: &str) -> Result<DateTime<Utc>> {
         return Ok(naive.and_hms_opt(0, 0, 0).unwrap().and_utc());
     }
 
-    bail!("Invalid date format: '{}'. Use YYYY-MM-DD or RFC3339.", date_str)
+    bail!(
+        "Invalid date format: '{}'. Use YYYY-MM-DD or RFC3339.",
+        date_str
+    )
 }
 
 /// Default start/end for a sync window of the last N days.

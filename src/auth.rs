@@ -22,12 +22,21 @@ pub fn set_current_user(name: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn resolve_current_user(db: &str, override_user: Option<&str>) -> Result<(i64, String, String)> {
-    let name = override_user.map(|s| s.to_string()).unwrap_or_else(current_user_name);
+pub fn resolve_current_user(
+    db: &str,
+    override_user: Option<&str>,
+) -> Result<(i64, String, String)> {
+    let name = override_user
+        .map(|s| s.to_string())
+        .unwrap_or_else(current_user_name);
     let store = Store::open(Path::new(db))?;
     match store.get_user(&name)? {
         Some((id, _, role)) => Ok((id, name, role)),
-        None => bail!("User '{}' not found. Add them with 'trackerclaw team add {}'", name, name),
+        None => bail!(
+            "User '{}' not found. Add them with 'trackerclaw team add {}'",
+            name,
+            name
+        ),
     }
 }
 

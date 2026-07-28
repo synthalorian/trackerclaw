@@ -17,6 +17,8 @@ pub struct AppConfig {
     pub pomodoro_break_minutes: u64,
     #[serde(default = "default_rate")]
     pub default_rate: f64,
+    /// Reserved for future UI theming.
+    #[allow(dead_code)]
     #[serde(default = "default_theme")]
     pub theme: String,
 }
@@ -33,11 +35,21 @@ impl Default for AppConfig {
     }
 }
 
-fn default_idle_threshold_ms() -> u64 { DEFAULT_IDLE_THRESHOLD_MS }
-fn default_pomodoro_work_minutes() -> u64 { DEFAULT_POMODORO_WORK_MINUTES }
-fn default_pomodoro_break_minutes() -> u64 { DEFAULT_POMODORO_BREAK_MINUTES }
-fn default_rate() -> f64 { DEFAULT_RATE }
-fn default_theme() -> String { "synthwave".to_string() }
+fn default_idle_threshold_ms() -> u64 {
+    DEFAULT_IDLE_THRESHOLD_MS
+}
+fn default_pomodoro_work_minutes() -> u64 {
+    DEFAULT_POMODORO_WORK_MINUTES
+}
+fn default_pomodoro_break_minutes() -> u64 {
+    DEFAULT_POMODORO_BREAK_MINUTES
+}
+fn default_rate() -> f64 {
+    DEFAULT_RATE
+}
+fn default_theme() -> String {
+    "synthwave".to_string()
+}
 
 pub fn config_path() -> String {
     shellexpand::tilde("~/.config/trackerclaw/config.toml").to_string()
@@ -55,12 +67,18 @@ pub fn load_config() -> AppConfig {
         Ok(content) => match toml::from_str::<AppConfig>(&content) {
             Ok(config) => config,
             Err(e) => {
-                eprintln!("Warning: Failed to parse config.toml: {}. Using defaults.", e);
+                eprintln!(
+                    "Warning: Failed to parse config.toml: {}. Using defaults.",
+                    e
+                );
                 AppConfig::default()
             }
         },
         Err(e) => {
-            eprintln!("Warning: Failed to read config.toml: {}. Using defaults.", e);
+            eprintln!(
+                "Warning: Failed to read config.toml: {}. Using defaults.",
+                e
+            );
             AppConfig::default()
         }
     }

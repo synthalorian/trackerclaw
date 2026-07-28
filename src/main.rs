@@ -2,27 +2,27 @@ use chrono::Datelike;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod store;
-mod tui;
-mod gui;
-mod report;
-mod cli;
-mod pomodoro;
-mod charts;
-mod idle;
+mod auth;
 mod autotag;
-mod invoice;
-mod notifications;
-mod webhook;
 mod budget;
 mod calendar;
+mod charts;
+mod cli;
+mod config;
+mod gui;
+mod idle;
+mod install;
 mod integrations;
+mod invoice;
+mod notifications;
+mod pomodoro;
+mod project;
+mod report;
+mod store;
 mod team;
 mod time_parse;
-mod config;
-mod project;
-mod install;
-mod auth;
+mod tui;
+mod webhook;
 
 #[derive(Parser)]
 #[command(name = "trackerclaw")]
@@ -78,9 +78,7 @@ enum Commands {
         output: PathBuf,
     },
     /// Start a Pomodoro focus session
-    Pomodoro {
-        name: Option<String>,
-    },
+    Pomodoro { name: Option<String> },
     /// Monitor idle time and auto-pause tracking
     Idle,
     /// Check idle status
@@ -156,7 +154,9 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum EntryAction {
-    Show { id: i64 },
+    Show {
+        id: i64,
+    },
     Edit {
         id: i64,
         #[arg(short, long)]
@@ -168,7 +168,9 @@ enum EntryAction {
         #[arg(short, long)]
         ended_at: Option<String>,
     },
-    Delete { id: i64 },
+    Delete {
+        id: i64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -194,7 +196,9 @@ enum ProjectAction {
         #[arg(long)]
         color: Option<String>,
     },
-    Delete { name: String },
+    Delete {
+        name: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -206,13 +210,25 @@ enum BudgetAction {
 
 #[derive(Subcommand)]
 enum WebhookAction {
-    Set { url: String, #[arg(short, long)] enabled: bool, #[arg(short, long)] headers: Option<String> },
+    Set {
+        url: String,
+        #[arg(short, long)]
+        enabled: bool,
+        #[arg(short, long)]
+        headers: Option<String>,
+    },
     Show,
 }
 
 #[derive(Subcommand)]
 enum TogglAction {
-    Import { api_token: String, #[arg(short, long)] start: String, #[arg(short, long)] end: String },
+    Import {
+        api_token: String,
+        #[arg(short, long)]
+        start: String,
+        #[arg(short, long)]
+        end: String,
+    },
     Export {
         api_token: String,
         #[arg(short, long)]
@@ -238,10 +254,20 @@ enum ClockifyAction {
 
 #[derive(Subcommand)]
 enum TeamAction {
-    Add { name: String, #[arg(short, long, default_value = "member")] role: String },
+    Add {
+        name: String,
+        #[arg(short, long, default_value = "member")]
+        role: String,
+    },
     List,
-    Switch { name: String },
-    Report { name: String, #[arg(short, long, default_value = "7")] days: i64 },
+    Switch {
+        name: String,
+    },
+    Report {
+        name: String,
+        #[arg(short, long, default_value = "7")]
+        days: i64,
+    },
 }
 
 #[tokio::main]
@@ -256,7 +282,12 @@ async fn main() -> anyhow::Result<()> {
     let is_admin = role == "admin";
 
     match args.cmd {
-        Some(Commands::Start { name, tags, project, auto_tags }) => {
+        Some(Commands::Start {
+            name,
+            tags,
+            project,
+            auto_tags,
+        }) => {
             let final_tags = if auto_tags {
                 autotag::ensure_config_exists()?;
                 let detected = autotag::auto_detect_tags();
@@ -277,7 +308,15 @@ async fn main() -> anyhow::Result<()> {
                 tags
             };
             let project_id = match project {
-                Some(ref name) => Some(project::resolve_project_id(&db_path, name)?.ok_or_else(|| anyhow::anyhow!("Project '{}' not found. Create it with 'trackerclaw project add {}'", name, name))?),
+                Some(ref name) => {
+                    Some(project::resolve_project_id(&db_path, name)?.ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Project '{}' not found. Create it with 'trackerclaw project add {}'",
+                            name,
+                            name
+                        )
+                    })?)
+                }
                 None => None,
             };
             cli::start(&db_path, name, final_tags, project_id, user_id).await
@@ -287,9 +326,13 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Today) => cli::today(&db_path, user_id, is_admin).await,
         Some(Commands::Tui) => tui::run(&db_path).await,
         Some(Commands::Gui { bind }) => gui::run(&db_path, &bind).await,
-        Some(Commands::Report { days, project }) => report::generate(&db_path, days, project, user_id, is_admin).await,
-        Some(Commands::Pomodoro { name }) => pomodoro::run(&db_path, name).await,
-        Some(Commands::Export { format, output }) => cli::export(&db_path, &format, &output, user_id, is_admin).await,
+        Some(Commands::Report { days, project }) => {
+            report::generate(&db_path, days, project, user_id, is_admin).await
+        }
+        Some(Commands::Pomodoro { name }) => pomodoro::run(&db_path, name, user_id).await,
+        Some(Commands::Export { format, output }) => {
+            cli::export(&db_path, &format, &output, user_id, is_admin).await
+        }
         Some(Commands::Idle) => idle::run_idle_monitor(&db_path).await,
         Some(Commands::IdleStatus) => {
             println!("{}", idle::check_idle_status());
@@ -308,29 +351,83 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::Entry { action }) => match action {
             EntryAction::Show { id } => cli::show_entry(&db_path, id, user_id, is_admin).await,
-            EntryAction::Edit { id, name, tags, started_at, ended_at } => {
-                cli::edit_entry(&db_path, id, name.as_deref(), tags.as_deref(), started_at.as_deref(), ended_at.as_deref(), user_id, is_admin).await
+            EntryAction::Edit {
+                id,
+                name,
+                tags,
+                started_at,
+                ended_at,
+            } => {
+                cli::edit_entry(
+                    &db_path,
+                    id,
+                    name.as_deref(),
+                    tags.as_deref(),
+                    started_at.as_deref(),
+                    ended_at.as_deref(),
+                    user_id,
+                    is_admin,
+                )
+                .await
             }
             EntryAction::Delete { id } => cli::delete_entry(&db_path, id, user_id, is_admin).await,
         },
-        Some(Commands::Invoice { client, rate, days, tag, project, output }) => {
+        Some(Commands::Invoice {
+            client,
+            rate,
+            days,
+            tag,
+            project,
+            output,
+        }) => {
             let rate = if let Some(ref name) = project {
                 let store = crate::store::Store::open(std::path::Path::new(&db_path))?;
-                rate.or_else(|| store.get_project_by_name(name).ok().flatten().and_then(|p| p.hourly_rate))
-                    .unwrap_or_else(|| config::load_config().default_rate)
+                rate.or_else(|| {
+                    store
+                        .get_project_by_name(name)
+                        .ok()
+                        .flatten()
+                        .and_then(|p| p.hourly_rate)
+                })
+                .unwrap_or_else(|| config::load_config().default_rate)
             } else {
                 rate.unwrap_or_else(|| config::load_config().default_rate)
             };
-            invoice::generate_invoice_file(&db_path, &client, rate, days, tag.as_deref(), project.as_deref(), user_id, is_admin, &output).await
+            invoice::generate_invoice_file(
+                &db_path,
+                &client,
+                rate,
+                days,
+                tag.as_deref(),
+                project.as_deref(),
+                user_id,
+                is_admin,
+                &output,
+            )
+            .await
         }
         Some(Commands::Project { action }) => match action {
-            ProjectAction::Add { name, client, rate, color } => {
-                project::add_project(&db_path, &name, client.as_deref(), rate, color.as_deref())
-            }
+            ProjectAction::Add {
+                name,
+                client,
+                rate,
+                color,
+            } => project::add_project(&db_path, &name, client.as_deref(), rate, color.as_deref()),
             ProjectAction::List => project::list_projects(&db_path),
-            ProjectAction::Edit { name, new_name, client, rate, color } => {
-                project::edit_project(&db_path, &name, new_name.as_deref(), client.as_deref(), rate, color.as_deref())
-            }
+            ProjectAction::Edit {
+                name,
+                new_name,
+                client,
+                rate,
+                color,
+            } => project::edit_project(
+                &db_path,
+                &name,
+                new_name.as_deref(),
+                client.as_deref(),
+                rate,
+                color.as_deref(),
+            ),
             ProjectAction::Delete { name } => project::delete_project(&db_path, &name),
         },
         Some(Commands::Budget { action }) => match action {
@@ -354,27 +451,63 @@ async fn main() -> anyhow::Result<()> {
             Ok(())
         }
         Some(Commands::Webhook { action }) => match action {
-            WebhookAction::Set { url, enabled, headers } => webhook::set_webhook(&db_path, &url, enabled, headers.as_deref()),
+            WebhookAction::Set {
+                url,
+                enabled,
+                headers,
+            } => webhook::set_webhook(&db_path, &url, enabled, headers.as_deref()),
             WebhookAction::Show => webhook::show_webhook(&db_path),
         },
         Some(Commands::Toggl { action }) => match action {
-            TogglAction::Import { api_token, start, end } => integrations::import_toggl(&db_path, &api_token, &start, &end).await,
-            TogglAction::Export { api_token, workspace_id, start, end } => {
-                integrations::export_toggl(&db_path, &api_token, workspace_id, start.as_deref(), end.as_deref()).await
+            TogglAction::Import {
+                api_token,
+                start,
+                end,
+            } => integrations::import_toggl(&db_path, &api_token, &start, &end).await,
+            TogglAction::Export {
+                api_token,
+                workspace_id,
+                start,
+                end,
+            } => {
+                integrations::export_toggl(
+                    &db_path,
+                    &api_token,
+                    workspace_id,
+                    start.as_deref(),
+                    end.as_deref(),
+                )
+                .await
             }
         },
         Some(Commands::Clockify { action }) => match action {
-            ClockifyAction::Import { api_key, workspace_id, start, end } => {
+            ClockifyAction::Import {
+                api_key,
+                workspace_id,
+                start,
+                end,
+            } => {
                 integrations::import_clockify(&db_path, &api_key, &workspace_id, &start, &end).await
             }
         },
         Some(Commands::Team { action }) => match action {
-            TeamAction::Add { name, role: new_role } => {
+            TeamAction::Add {
+                name,
+                role: new_role,
+            } => {
                 auth::require_admin(&role)?;
                 team::add_user(&db_path, &name, &new_role)
             }
             TeamAction::List => team::list_users(&db_path),
             TeamAction::Switch { name } => {
+                let store = crate::store::Store::open(std::path::Path::new(&db_path))?;
+                if store.get_user(&name)?.is_none() {
+                    anyhow::bail!(
+                        "User '{}' not found. Add them with 'trackerclaw team add {}'",
+                        name,
+                        name
+                    );
+                }
                 auth::set_current_user(&name)?;
                 println!("Switched to user '{}'.", name);
                 Ok(())
